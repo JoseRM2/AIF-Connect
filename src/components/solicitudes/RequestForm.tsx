@@ -114,6 +114,8 @@ export default function RequestForm({
       }
 
       const tipoSolicitudLabel = TIPO_SOLICITUD_LABELS[form.tipo];
+      const estatusInicial =
+        form.tipo === "incapacidad" ? "Pendiente_RH" : "Pendiente_Jefe";
 
       const { error: insertError } = await supabase.from("solicitudes").insert({
         colaborador_id: targetUserId,
@@ -121,7 +123,7 @@ export default function RequestForm({
         fecha_inicio: form.fecha_inicio,
         fecha_fin: form.fecha_fin,
         motivo: form.motivo.trim() || null,
-        estatus: "Pendiente_Jefe",
+        estatus: estatusInicial,
       });
 
       if (insertError) {

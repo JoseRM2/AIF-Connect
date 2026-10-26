@@ -69,7 +69,7 @@ export default function LoginPage() {
               htmlFor="email"
               className="text-[10px] font-bold uppercase tracking-widest text-gray-600"
             >
-              CORREO ELECTRÓNICO (1 = RH, 2 = COLABORADOR)
+              CORREO ELECTRÓNICO
             </label>
             <div className="relative flex h-12 w-full items-center rounded-md border border-brand-beige bg-brand-surface px-4 focus-within:border-brand-gold">
               <svg

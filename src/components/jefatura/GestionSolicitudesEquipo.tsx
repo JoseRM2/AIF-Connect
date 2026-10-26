@@ -195,13 +195,18 @@ export default function GestionSolicitudesEquipo() {
           return;
         }
 
-        // Paso 3: Consultar `solicitudes` filtrando con `.in("colaborador_id", equipoIds)`
+        // Paso 3: Consultar `solicitudes` filtrando por el equipo directo y la matriz de tipos de Jefatura
         const { data, error } = await supabase
           .from("solicitudes")
           .select(
             "*, colaboradores!solicitudes_colaborador_id_fkey(nombre_completo, departamento, puesto)"
           )
           .in("colaborador_id", equipoIds)
+          .in("tipo_solicitud", [
+            "Permiso sin goce de sueldo",
+            "Permiso con goce de sueldo",
+            "Vacaciones",
+          ])
           .order("created_at", { ascending: false });
 
         if (error) {

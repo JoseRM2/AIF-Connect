@@ -2,6 +2,7 @@
 
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
+import { useAutoLogout } from "@/hooks/useAutoLogout";
 import type { PerfilSesionActual, RolSistema } from "@/lib/auth/session";
 
 interface AuthRoleContextValue {
@@ -31,6 +32,9 @@ export function AuthRoleProvider({
   perfil: PerfilSesionActual | null;
   children: ReactNode;
 }) {
+  // Cierre de sesión automático tras 8 horas de inactividad en el Dashboard
+  useAutoLogout();
+
   const value: AuthRoleContextValue = perfil
     ? {
         userId: perfil.userId,

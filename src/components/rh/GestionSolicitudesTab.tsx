@@ -164,6 +164,7 @@ export default function GestionSolicitudesTab() {
             .select(
               "*, colaboradores!colaborador_id(nombre_completo, saldo_vacaciones)"
             )
+            .in("tipo_solicitud", ["Vacaciones pagadas", "Incapacidad"])
             .order("created_at", { ascending: false }),
           supabase
             .from("colaboradores")
@@ -356,7 +357,7 @@ export default function GestionSolicitudesTab() {
         .from("solicitudes")
         .insert({
           colaborador_id: colaborador.id,
-          tipo_solicitud: "Vacaciones Pagadas",
+          tipo_solicitud: "Vacaciones pagadas",
           fecha_inicio: form.fecha_inicio,
           fecha_fin: form.fecha_fin || form.fecha_inicio,
           motivo: motivoTexto,
@@ -378,7 +379,7 @@ export default function GestionSolicitudesTab() {
         const nuevaFila: SolicitudConColaborador = {
           id: insertada.id,
           colaborador_id: insertada.colaborador_id,
-          tipo_solicitud: insertada.tipo_solicitud || "Vacaciones Pagadas",
+          tipo_solicitud: insertada.tipo_solicitud || "Vacaciones pagadas",
           fecha_inicio: insertada.fecha_inicio,
           fecha_fin: insertada.fecha_fin,
           motivo: insertada.motivo ?? motivoTexto,

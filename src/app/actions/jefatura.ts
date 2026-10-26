@@ -152,11 +152,16 @@ export async function obtenerSolicitudesEquipoAction(): Promise<ObtenerSolicitud
 
     const mapaEquipo = new Map(listaEquipo.map((e) => [e.id, e]));
 
-    // 3. Consultar `solicitudes` filtrando con `.in("colaborador_id", equipoIds)`
+    // 3. Consultar `solicitudes` filtrando por el equipo directo y la matriz de tipos de Jefatura
     const { data: filasSolicitudes, error: solError } = await supabaseAdmin
       .from("solicitudes")
       .select("*")
       .in("colaborador_id", equipoIds)
+      .in("tipo_solicitud", [
+        "Permiso sin goce de sueldo",
+        "Permiso con goce de sueldo",
+        "Vacaciones",
+      ])
       .order("created_at", { ascending: false });
 
     if (solError) {
