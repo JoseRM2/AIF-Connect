@@ -16,7 +16,10 @@ export default async function DashboardLayout({
   return (
     <AuthRoleProvider perfil={perfil}>
       <div className="flex h-screen w-full bg-brand-beige">
-        <Sidebar rolSistema={perfil.rolSistema} />
+        <Sidebar
+          rolSistema={perfil.rolSistema}
+          esJefatura={perfil.esJefatura}
+        />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </AuthRoleProvider>

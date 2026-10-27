@@ -61,15 +61,17 @@ export default async function SolicitudesPage() {
     redirect("/login");
   }
 
-  // 1. Consultar `saldo_vacaciones` y `rol_sistema` actual en `colaboradores`
+  // 1. Consultar `saldo_vacaciones`, `rol_sistema` y `es_jefatura` actual en `colaboradores`
   const { data: colaborador } = await supabase
     .from("colaboradores")
-    .select("saldo_vacaciones, rol_sistema")
+    .select("saldo_vacaciones, rol_sistema, es_jefatura")
     .eq("id", user.id)
     .maybeSingle();
 
   const saldoDias = colaborador?.saldo_vacaciones ?? 0;
-  const esJefatura = (colaborador?.rol_sistema ?? "").trim() === "Jefatura";
+  const esJefatura =
+    (colaborador?.rol_sistema ?? "").trim() === "Jefatura" ||
+    Boolean(colaborador?.es_jefatura);
 
   const saldoReal: SaldoVacaciones = {
     periodos_activos: saldoDias > 0 ? 1 : 0,

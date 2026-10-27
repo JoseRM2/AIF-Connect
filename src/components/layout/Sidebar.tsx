@@ -48,15 +48,19 @@ const NAV_ITEMS_RH: NavItem[] = [
 
 export default function Sidebar({
   rolSistema,
+  esJefatura: esJefaturaProp,
 }: {
   rolSistema?: RolSistema;
+  esJefatura?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { rolSistema: rolContexto } = useAuthRole();
+  const { rolSistema: rolContexto, esJefatura: esJefaturaContexto } =
+    useAuthRole();
 
   const rolActual: RolSistema = rolSistema ?? rolContexto;
-  const esJefatura = rolActual === "Jefatura";
+  const tienePersonalACargo =
+    rolActual === "Jefatura" || Boolean(esJefaturaProp ?? esJefaturaContexto);
   const esRecursosHumanos = rolActual === "Recursos Humanos";
 
   const isActive = (href: string) =>
@@ -110,7 +114,7 @@ export default function Sidebar({
             );
           })}
 
-          {esJefatura && (
+          {tienePersonalACargo && (
             <>
               <div className="mx-6 my-2 border-t border-white/10 pt-2">
                 <span className="text-[9px] font-bold uppercase tracking-widest text-brand-gold/80">

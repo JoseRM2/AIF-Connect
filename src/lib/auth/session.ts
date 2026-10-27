@@ -11,6 +11,7 @@ export interface PerfilSesionActual {
   nombreCompleto: string;
   empresa: string;
   rolSistema: RolSistema;
+  esJefatura: boolean;
   esRecursosHumanos: boolean;
 }
 
@@ -43,11 +44,15 @@ export const obtenerSesionYRol = cache(
 
     const { data: colaborador } = await supabase
       .from("colaboradores")
-      .select("id, nombre_completo, correo_corporativo, empresa, rol_sistema")
+      .select(
+        "id, nombre_completo, correo_corporativo, empresa, rol_sistema, es_jefatura"
+      )
       .eq("id", user.id)
       .maybeSingle();
 
     const rolSistema = normalizarRolSistema(colaborador?.rol_sistema);
+    const esJefatura =
+      rolSistema === "Jefatura" || Boolean(colaborador?.es_jefatura);
 
     return {
       userId: user.id,
@@ -58,6 +63,7 @@ export const obtenerSesionYRol = cache(
         "Colaborador",
       empresa: colaborador?.empresa || "AIF",
       rolSistema,
+      esJefatura,
       esRecursosHumanos: rolSistema === ROL_RECURSOS_HUMANOS,
     };
   }

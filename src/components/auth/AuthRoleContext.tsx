@@ -11,6 +11,7 @@ interface AuthRoleContextValue {
   nombreCompleto: string;
   empresa: string;
   rolSistema: RolSistema;
+  esJefatura: boolean;
   esRecursosHumanos: boolean;
 }
 
@@ -20,6 +21,7 @@ const DEFAULT_CONTEXT: AuthRoleContextValue = {
   nombreCompleto: "Colaborador",
   empresa: "AIF",
   rolSistema: "Colaborador",
+  esJefatura: false,
   esRecursosHumanos: false,
 };
 
@@ -42,6 +44,8 @@ export function AuthRoleProvider({
         nombreCompleto: perfil.nombreCompleto,
         empresa: perfil.empresa,
         rolSistema: perfil.rolSistema,
+        esJefatura:
+          perfil.rolSistema === "Jefatura" || Boolean(perfil.esJefatura),
         esRecursosHumanos: perfil.rolSistema === "Recursos Humanos",
       }
     : DEFAULT_CONTEXT;

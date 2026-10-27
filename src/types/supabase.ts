@@ -21,6 +21,7 @@ export interface Database {
           departamento?: string | null;
           empresa?: string | null;
           rol_sistema: string | null;
+          es_jefatura?: boolean | null;
           rol?: "rh" | "colaborador";
           estatus: "Activo" | "Inactivo" | "activo" | "inactivo" | string;
           saldo_vacaciones: number | null;
@@ -78,6 +79,7 @@ export interface Database {
           departamento?: string | null;
           empresa?: string | null;
           rol_sistema?: string | null;
+          es_jefatura?: boolean | null;
           rol?: "rh" | "colaborador";
           estatus?: "Activo" | "Inactivo" | "activo" | "inactivo" | string;
           saldo_vacaciones?: number | null;
@@ -135,6 +137,7 @@ export interface Database {
           departamento?: string | null;
           empresa?: string | null;
           rol_sistema?: string | null;
+          es_jefatura?: boolean | null;
           rol?: "rh" | "colaborador";
           estatus?: "Activo" | "Inactivo" | "activo" | "inactivo" | string;
           saldo_vacaciones?: number | null;

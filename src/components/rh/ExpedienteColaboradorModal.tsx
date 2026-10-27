@@ -233,6 +233,13 @@ export default function ExpedienteColaboradorModal({
         ? "Jefatura"
         : (colaboradorEditar?.rol_sistema ?? "Colaborador")
   );
+  const [esJefatura, setEsJefatura] = useState<boolean>(
+    Boolean(
+      rawEditar.es_jefatura ??
+        (colaboradorEditar?.rol_sistema === "Jefatura" ||
+          colaboradorEditar?.rol_sistema === "Jefe")
+    )
+  );
   const [codigoPosicion, setCodigoPosicion] = useState<string>(
     String(rawEditar.codigo_posicion ?? "")
   );
@@ -366,7 +373,7 @@ export default function ExpedienteColaboradorModal({
     [fechaIngreso]
   );
 
-  // Consultar colaboradores con rol de supervisión (ENUM `rol_sistema` = "Jefatura")
+  // Consultar colaboradores con bandera de supervisión (`es_jefatura = true`)
   useEffect(() => {
     let cancelado = false;
 
@@ -377,7 +384,7 @@ export default function ExpedienteColaboradorModal({
         const { data, error } = await supabase
           .from("colaboradores")
           .select("id, nombre_completo")
-          .eq("rol_sistema", "Jefatura")
+          .eq("es_jefatura", true)
           .order("nombre_completo", { ascending: true });
 
         if (cancelado || error) return;
@@ -498,6 +505,7 @@ export default function ExpedienteColaboradorModal({
         correo_corporativo: correoLimpio,
         empresa, // "AIF" | "ROYAL"
         rol_sistema: rolSistema === "RH" ? "Recursos Humanos" : (rolSistema || "Colaborador"),
+        es_jefatura: esJefatura,
         saldo_vacaciones: saldoFinal,
 
         // Identificación
@@ -1042,7 +1050,13 @@ export default function ExpedienteColaboradorModal({
                   <select
                     id={`rol-sis-${uid}`}
                     value={rolSistema}
-                    onChange={(e) => setRolSistema(e.target.value)}
+                    onChange={(e) => {
+                      const nuevoRol = e.target.value;
+                      setRolSistema(nuevoRol);
+                      if (nuevoRol === "Jefatura") {
+                        setEsJefatura(true);
+                      }
+                    }}
                     className={FIELD}
                   >
                     {ROLES_SISTEMA.map((rol) => (
@@ -1066,6 +1080,35 @@ export default function ExpedienteColaboradorModal({
                   placeholder="Posición Autorizador"
                   className={FIELD}
                 />
+              </div>
+
+              <div className="md:col-span-3">
+                <label
+                  htmlFor={`es-jefatura-${uid}`}
+                  className="flex cursor-pointer select-none items-center justify-between gap-3 rounded-sm border border-gray-200 bg-brand-beige/25 px-4 py-2.5 transition-colors hover:border-brand-dark/40"
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      id={`es-jefatura-${uid}`}
+                      type="checkbox"
+                      checked={esJefatura}
+                      onChange={(e) => setEsJefatura(e.target.checked)}
+                      className="h-4 w-4 cursor-pointer rounded-sm border-gray-300 accent-brand-dark focus:ring-brand-dark"
+                    />
+                    <span className="text-xs font-semibold text-gray-800">
+                      Este perfil tiene personal a su cargo (Jefatura)
+                    </span>
+                  </div>
+                  <span
+                    className={`rounded-sm border px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest ${
+                      esJefatura
+                        ? "border-brand-gold/50 bg-brand-dark text-brand-gold"
+                        : "border-gray-200 bg-white text-gray-400"
+                    }`}
+                  >
+                    {esJefatura ? "JEFATURA ACTIVA" : "SIN EQUIPO A CARGO"}
+                  </span>
+                </label>
               </div>
 
               <div>

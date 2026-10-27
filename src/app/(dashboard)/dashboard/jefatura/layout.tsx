@@ -13,6 +13,7 @@ export default async function JefaturaProtectedLayout({
 
   if (
     perfil.rolSistema !== "Jefatura" &&
+    !perfil.esJefatura &&
     perfil.rolSistema !== "Recursos Humanos"
   ) {
     redirect("/dashboard");
