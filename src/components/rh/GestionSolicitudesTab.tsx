@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { EstatusSolicitud } from "@/types/solicitudes";
-import type { VacacionesPagadasForm } from "@/types/rh";
+import type {
+  TipoAsignacionDirectaRh,
+  VacacionesPagadasForm,
+} from "@/types/rh";
 
 interface ColaboradorRelacion {
   nombre_completo: string;
@@ -61,6 +64,7 @@ const ESTATUS_BADGE: Record<
 
 const FORM_INICIAL: VacacionesPagadasForm = {
   colaborador_id: "",
+  tipo_solicitud: "Vacaciones pagadas",
   fecha_inicio: "",
   fecha_fin: "",
   dias_a_pagar: 1,
@@ -334,7 +338,7 @@ export default function GestionSolicitudesTab() {
     }
   };
 
-  /** Crea una solicitud directa de vacaciones pagadas desde RH en Supabase. */
+  /** Crea una asignación directa de Vacaciones pagadas o Incapacidad desde RH en Supabase. */
   const handleCrearVacaciones = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (isCreatingVacaciones) return;
@@ -343,9 +347,16 @@ export default function GestionSolicitudesTab() {
     if (!colaborador) return;
 
     const dias = Math.max(1, Number(form.dias_a_pagar) || 1);
-    const motivoTexto = `Solicitud directa de vacaciones pagadas (${dias} ${
-      dias === 1 ? "día" : "días"
-    })`;
+    const tipoElegido: TipoAsignacionDirectaRh =
+      form.tipo_solicitud || "Vacaciones pagadas";
+    const motivoTexto =
+      tipoElegido === "Incapacidad"
+        ? `Asignación directa de incapacidad (${dias} ${
+            dias === 1 ? "día" : "días"
+          })`
+        : `Solicitud directa de vacaciones pagadas (${dias} ${
+            dias === 1 ? "día" : "días"
+          })`;
 
     setIsCreatingVacaciones(true);
     setErrorMsg(null);
@@ -357,7 +368,7 @@ export default function GestionSolicitudesTab() {
         .from("solicitudes")
         .insert({
           colaborador_id: colaborador.id,
-          tipo_solicitud: "Vacaciones pagadas",
+          tipo_solicitud: tipoElegido,
           fecha_inicio: form.fecha_inicio,
           fecha_fin: form.fecha_fin || form.fecha_inicio,
           motivo: motivoTexto,
@@ -370,7 +381,7 @@ export default function GestionSolicitudesTab() {
 
       if (error) {
         setErrorMsg(
-          `No se pudo crear la solicitud de vacaciones pagadas: ${error.message}`
+          `No se pudo crear la asignación de ${tipoElegido.toLowerCase()}: ${error.message}`
         );
         return;
       }
@@ -379,7 +390,7 @@ export default function GestionSolicitudesTab() {
         const nuevaFila: SolicitudConColaborador = {
           id: insertada.id,
           colaborador_id: insertada.colaborador_id,
-          tipo_solicitud: insertada.tipo_solicitud || "Vacaciones pagadas",
+          tipo_solicitud: insertada.tipo_solicitud || tipoElegido,
           fecha_inicio: insertada.fecha_inicio,
           fecha_fin: insertada.fecha_fin,
           motivo: insertada.motivo ?? motivoTexto,
@@ -395,7 +406,7 @@ export default function GestionSolicitudesTab() {
 
       setForm(FORM_INICIAL);
       setMensajeCreada(
-        `Solicitud creada para ${colaborador.nombre_completo} (${dias} ${
+        `${tipoElegido} asignada para ${colaborador.nombre_completo} (${dias} ${
           dias === 1 ? "día" : "días"
         }).`
       );
@@ -403,7 +414,7 @@ export default function GestionSolicitudesTab() {
       setErrorMsg(
         err instanceof Error
           ? err.message
-          : "Ocurrió un error al registrar las vacaciones pagadas."
+          : "Ocurrió un error al registrar la asignación."
       );
     } finally {
       setIsCreatingVacaciones(false);
@@ -606,14 +617,15 @@ export default function GestionSolicitudesTab() {
         </div>
       </section>
 
-      {/* Bloque Derecho: Vacaciones Pagadas (Formulario exclusivo RH) */}
+      {/* Bloque Derecho: Asignar vacaciones / incapacidad (Formulario exclusivo RH) */}
       <aside className="rounded-sm border-t-4 border-brand-dark bg-brand-surface p-6 shadow-sm lg:col-span-4">
         <header className="mb-5">
           <h2 className="font-serif text-base font-bold text-brand-gold">
-            Vacaciones Pagadas
+            Asignar vacaciones
           </h2>
           <p className="mt-1 text-xs leading-relaxed text-gray-500">
-            Crear solicitud directa de vacaciones pagadas para un colaborador.
+            Asignar de forma directa vacaciones pagadas o incapacidad para un
+            colaborador.
           </p>
         </header>
 
@@ -643,6 +655,28 @@ export default function GestionSolicitudesTab() {
                   {c.nombre_completo} ({c.empresa || "AIF"})
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="rh-vac-tipo" className={LABEL}>
+              TIPO DE SOLICITUD
+            </label>
+            <select
+              id="rh-vac-tipo"
+              value={form.tipo_solicitud}
+              onChange={(e) => {
+                setForm((prev) => ({
+                  ...prev,
+                  tipo_solicitud: e.target.value as TipoAsignacionDirectaRh,
+                }));
+                setMensajeCreada(null);
+              }}
+              required
+              className={FIELD}
+            >
+              <option value="Vacaciones pagadas">Vacaciones pagadas</option>
+              <option value="Incapacidad">Incapacidad</option>
             </select>
           </div>
 
@@ -683,7 +717,9 @@ export default function GestionSolicitudesTab() {
 
           <div>
             <label htmlFor="rh-vac-dias" className={LABEL}>
-              DÍAS A PAGAR
+              {form.tipo_solicitud === "Incapacidad"
+                ? "DÍAS DE INCAPACIDAD"
+                : "DÍAS A PAGAR"}
             </label>
             <input
               id="rh-vac-dias"

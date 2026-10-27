@@ -350,11 +350,18 @@ export default function ReporteEmpleados({
         };
       });
     } else if (tipoReporte === "Vacaciones") {
+      // Incluye todas las vacaciones: tanto las solicitadas/aprobadas por Jefes Directos ("Vacaciones")
+      // como las otorgadas por Recursos Humanos ("Vacaciones pagadas" / "Vacaciones Pagadas")
       let query = supabase
         .from("solicitudes")
         .select(
-          "*, colaboradores!colaborador_id(id, nombre_completo, correo_corporativo, empresa, puesto, departamento, saldo_vacaciones)"
+          "*, colaboradores!colaborador_id(id, nombre_completo, correo_corporativo, empresa, puesto, departamento, saldo_vacaciones, jefe_directo)"
         )
+        .in("tipo_solicitud", [
+          "Vacaciones",
+          "Vacaciones pagadas",
+          "Vacaciones Pagadas",
+        ])
         .order("fecha_inicio", { ascending: false });
 
       if (fechaInicio) {
@@ -387,6 +394,12 @@ export default function ReporteEmpleados({
             ? item.dias
             : calcularDiasEntreFechas(item.fecha_inicio, item.fecha_fin);
 
+        const tipoTexto = item.tipo_solicitud || item.tipo || "Vacaciones";
+        const esOtorgadaPorRH = tipoTexto
+          .trim()
+          .toLowerCase()
+          .includes("pagadas");
+
         return {
           "Nombre del Empleado":
             colab.nombre_completo || colab.nombre || "Colaborador",
@@ -395,8 +408,10 @@ export default function ReporteEmpleados({
           Empresa: (colab.empresa || "AIF").toUpperCase(),
           Departamento: colab.departamento || "General",
           Puesto: colab.puesto || "Sin puesto",
-          "Tipo de Solicitud":
-            item.tipo_solicitud || item.tipo || "Vacaciones",
+          "Tipo de Vacaciones": tipoTexto,
+          "Otorgada / Autorizada por": esOtorgadaPorRH
+            ? "Recursos Humanos (RH)"
+            : "Jefe Directo",
           "Fecha Inicio": formatearFechaLegible(item.fecha_inicio),
           "Fecha Fin": formatearFechaLegible(item.fecha_fin),
           "Días Solicitados": diasCalculados,
@@ -585,7 +600,9 @@ export default function ReporteEmpleados({
           >
             <option value="Empleados">Empleados (Directorio / Nómina)</option>
             <option value="Asistencia">Asistencia (Entradas y Salidas)</option>
-            <option value="Vacaciones">Vacaciones y Permisos</option>
+            <option value="Vacaciones">
+              Vacaciones (Jefes Directos y RH)
+            </option>
           </select>
         </div>
 

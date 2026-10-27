@@ -37,9 +37,12 @@ export interface SolicitudRh {
   estatus_firma: EstatusFirmaRh;
 }
 
-/** Payload del formulario exclusivo de RH para Vacaciones Pagadas. */
+export type TipoAsignacionDirectaRh = "Vacaciones pagadas" | "Incapacidad";
+
+/** Payload del formulario exclusivo de RH para asignar Vacaciones pagadas o Incapacidad. */
 export interface VacacionesPagadasForm {
   colaborador_id: string;
+  tipo_solicitud: TipoAsignacionDirectaRh;
   fecha_inicio: string;
   fecha_fin: string;
   dias_a_pagar: number;

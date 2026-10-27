@@ -247,7 +247,9 @@ export async function resolverSolicitudEquipoAction(
     // 1. Obtener la solicitud y verificar que pertenezca al equipo del jefe actual
     const { data: solicitud, error: getSolError } = await supabaseAdmin
       .from("solicitudes")
-      .select("id, colaborador_id")
+      .select(
+        "id, colaborador_id, tipo_solicitud, fecha_inicio, fecha_fin, estatus"
+      )
       .eq("id", solicitudId)
       .maybeSingle();
 
@@ -292,7 +294,43 @@ export async function resolverSolicitudEquipoAction(
       };
     }
 
-    // 2. Actualizar estatus en `solicitudes` (compatible con ENUM `estatus_solicitud`: `Aprobado_Jefe` o `Aprobado`)
+    // 2. Si se aprueba una solicitud de "Vacaciones", descontar días de `saldo_vacaciones`
+    const tipoNorm = normalizarTextoComparacion(solicitud.tipo_solicitud);
+    const estatusPrevioNorm = normalizarTextoComparacion(solicitud.estatus);
+    const yaEstabaAprobada =
+      estatusPrevioNorm === "aprobado_jefe" ||
+      estatusPrevioNorm === "aprobado" ||
+      estatusPrevioNorm === "completado";
+
+    if (
+      decision === "Aprobado" &&
+      tipoNorm === "vacaciones" &&
+      !yaEstabaAprobada &&
+      colaborador
+    ) {
+      const [y1, m1, d1] = (solicitud.fecha_inicio || "")
+        .split("-")
+        .map(Number);
+      const [y2, m2, d2] = (solicitud.fecha_fin || "").split("-").map(Number);
+
+      if (y1 && m1 && d1 && y2 && m2 && d2) {
+        const inicioMs = Date.UTC(y1, m1 - 1, d1);
+        const finMs = Date.UTC(y2, m2 - 1, d2);
+        const diasSolicitados =
+          finMs >= inicioMs
+            ? Math.round((finMs - inicioMs) / 86_400_000) + 1
+            : 1;
+        const saldoActual = Number(colaborador.saldo_vacaciones ?? 0);
+        const nuevoSaldo = Math.max(0, saldoActual - diasSolicitados);
+
+        await supabaseAdmin
+          .from("colaboradores")
+          .update({ saldo_vacaciones: nuevoSaldo })
+          .eq("id", solicitud.colaborador_id);
+      }
+    }
+
+    // 3. Actualizar estatus en `solicitudes` (compatible con ENUM `estatus_solicitud`: `Aprobado_Jefe` o `Aprobado`)
     let estatusAplicado: "Aprobado_Jefe" | "Aprobado" | "Rechazado" =
       decision === "Aprobado" ? "Aprobado_Jefe" : "Rechazado";
 
