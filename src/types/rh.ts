@@ -37,7 +37,7 @@ export interface SolicitudRh {
   estatus_firma: EstatusFirmaRh;
 }
 
-export type TipoAsignacionDirectaRh = "Vacaciones pagadas" | "Incapacidad";
+export type TipoAsignacionDirectaRh = "Vacaciones Pagadas" | "Incapacidad";
 
 /** Payload del formulario exclusivo de RH para asignar Vacaciones pagadas o Incapacidad. */
 export interface VacacionesPagadasForm {

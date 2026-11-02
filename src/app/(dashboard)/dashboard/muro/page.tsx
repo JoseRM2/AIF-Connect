@@ -1,11 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuthRole } from "@/components/auth/AuthRoleContext";
 import PostCard from "@/components/muro/PostCard";
+import { cumpleFiltroAudiencia } from "@/lib/muro";
 import { createClient } from "@/lib/supabase/client";
 import type { InteraccionMuroRow, PublicacionMuro } from "@/types/muro";
 
+function ordenarPublicacionesPorFecha(
+  lista: PublicacionMuro[]
+): PublicacionMuro[] {
+  return [...lista].sort((a, b) => {
+    const fechaA = a.fecha_publicacion ?? a.created_at ?? "";
+    const fechaB = b.fecha_publicacion ?? b.created_at ?? "";
+    return fechaB.localeCompare(fechaA);
+  });
+}
+
 export default function MuroPage() {
+  const {
+    rolSistema: rolContexto,
+    empresa: empresaContexto,
+    departamento: departamentoContexto,
+  } = useAuthRole();
   const [publicaciones, setPublicaciones] = useState<PublicacionMuro[]>([]);
   const [interacciones, setInteracciones] = useState<InteraccionMuroRow[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -25,19 +42,80 @@ export default function MuroPage() {
       } = await supabase.auth.getUser();
       setCurrentUserId(user?.id ?? null);
 
-      // 1. Consultar muro_publicaciones incluyendo el nombre del autor
-      const pubRes = await supabase
+      // 1. Validación de Usuario: obtener rol, empresa y departamento del empleado logueado
+      let esRH = rolContexto === "Recursos Humanos";
+      let userEmpresa = (empresaContexto || "AIF").trim();
+      let userDepartamento = (departamentoContexto || "Todos").trim();
+
+      if (user?.id) {
+        const { data: colab } = await supabase
+          .from("colaboradores")
+          .select("*")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (colab) {
+          const rolLimpio = (colab.rol_sistema ?? "").trim();
+          esRH =
+            esRH || rolLimpio === "Recursos Humanos" || rolLimpio === "RH";
+          if (colab.empresa?.trim()) {
+            userEmpresa = colab.empresa.trim();
+          }
+          const depColab = (colab.departamento ?? colab.area ?? "").trim();
+          if (depColab) {
+            userDepartamento = depColab;
+          }
+        }
+      }
+
+      const ahoraIso = new Date().toISOString();
+
+      // 2. Consultar muro_publicaciones:
+      // - Si NO es Recursos Humanos:
+      //   * Ocultar comunicados programados a futuro con .lte('fecha_publicacion', ahoraIso)
+      //   * Filtrar audiencia por empresa_destino ('Ambas' o userEmpresa) y departamento_destino ('Todos' o userDepartamento)
+      // - Si ES Recursos Humanos: cargar todos sin restricciones de audiencia ni fecha
+      let queryPublicaciones = supabase
         .from("muro_publicaciones")
-        .select("*, colaboradores!autor_id(nombre_completo)")
-        .order("created_at", { ascending: false });
+        .select("*, colaboradores!autor_id(nombre_completo)");
+
+      if (!esRH) {
+        queryPublicaciones = queryPublicaciones
+          .lte("fecha_publicacion", ahoraIso)
+          .or(
+            `empresa_destino.eq.Ambas,empresa_destino.eq."${userEmpresa}",empresa_destino.is.null`
+          )
+          .or(
+            `departamento_destino.eq.Todos,departamento_destino.eq."${userDepartamento}",departamento_destino.is.null`
+          );
+      }
+
+      const pubRes = await queryPublicaciones.order("fecha_publicacion", {
+        ascending: false,
+      });
 
       if (!pubRes.error && pubRes.data) {
-        setPublicaciones(pubRes.data as unknown as PublicacionMuro[]);
+        const filtradas = esRH
+          ? (pubRes.data as unknown as PublicacionMuro[])
+          : (pubRes.data as unknown as PublicacionMuro[]).filter(
+              (p) =>
+                (!p.fecha_publicacion ||
+                  new Date(p.fecha_publicacion).getTime() <= Date.now()) &&
+                cumpleFiltroAudiencia(p, userEmpresa, userDepartamento)
+            );
+        setPublicaciones(ordenarPublicacionesPorFecha(filtradas));
       } else {
-        const fallback = await supabase
+        let fallbackQuery = supabase
           .from("muro_publicaciones")
-          .select("*, colaboradores!autor_id(nombre_completo)")
-          .order("fecha_publicacion", { ascending: false });
+          .select("*, colaboradores!autor_id(nombre_completo)");
+
+        if (!esRH) {
+          fallbackQuery = fallbackQuery.lte("fecha_publicacion", ahoraIso);
+        }
+
+        const fallback = await fallbackQuery.order("created_at", {
+          ascending: false,
+        });
 
         if (fallback.error) {
           setErrorMsg(pubRes.error?.message ?? fallback.error.message);
@@ -45,7 +123,15 @@ export default function MuroPage() {
           return;
         }
 
-        setPublicaciones((fallback.data ?? []) as unknown as PublicacionMuro[]);
+        const filtradasFallback = esRH
+          ? ((fallback.data ?? []) as unknown as PublicacionMuro[])
+          : ((fallback.data ?? []) as unknown as PublicacionMuro[]).filter(
+              (p) =>
+                (!p.fecha_publicacion ||
+                  new Date(p.fecha_publicacion).getTime() <= Date.now()) &&
+                cumpleFiltroAudiencia(p, userEmpresa, userDepartamento)
+            );
+        setPublicaciones(ordenarPublicacionesPorFecha(filtradasFallback));
       }
 
       // 2. Consultar muro_interacciones incluyendo el nombre del colaborador
@@ -75,7 +161,7 @@ export default function MuroPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [rolContexto, empresaContexto, departamentoContexto]);
 
   useEffect(() => {
     fetchMuroData();

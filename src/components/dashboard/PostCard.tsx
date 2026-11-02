@@ -7,7 +7,9 @@ export interface Post {
   title: string;
   excerpt: string;
   author: string;
+  alcance?: string;
   requiereAcuse?: boolean;
+  esProgramado?: boolean;
 }
 
 export default function PostCard({
@@ -15,7 +17,9 @@ export default function PostCard({
   title,
   excerpt,
   author,
+  alcance = "General",
   requiereAcuse = false,
+  esProgramado = false,
 }: Post) {
   return (
     <article className="flex h-full flex-col rounded-md border border-gray-100 bg-brand-surface p-6 shadow-sm transition-shadow hover:shadow-md">
@@ -24,11 +28,21 @@ export default function PostCard({
           <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
             {date}
           </p>
-          {requiereAcuse && (
-            <span className="rounded-sm border border-status-warning/40 bg-status-warning/15 px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-status-warning">
-              ● REQUIERE ACUSE
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="rounded-sm border border-brand-gold/40 bg-brand-beige/60 px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-brand-dark">
+              {alcance}
             </span>
-          )}
+            {esProgramado && (
+              <span className="rounded-sm border border-brand-gold bg-brand-dark px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-brand-gold">
+                ● PROGRAMADO
+              </span>
+            )}
+            {requiereAcuse && (
+              <span className="rounded-sm border border-status-warning/40 bg-status-warning/15 px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-status-warning">
+                ● REQUIERE ACUSE
+              </span>
+            )}
+          </div>
         </div>
 
         <h3 className="mb-2 font-serif text-base font-bold leading-tight text-gray-900">

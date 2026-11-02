@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useAuthRole } from "@/components/auth/AuthRoleContext";
 import PostCard from "@/components/dashboard/PostCard";
-import { formatearFechaPublicacion } from "@/lib/muro";
+import {
+  cumpleFiltroAudiencia,
+  formatearAlcancePublicacion,
+  formatearFechaPublicacion,
+} from "@/lib/muro";
 import { createClient } from "@/lib/supabase/client";
 import type { PublicacionMuro } from "@/types/muro";
 
@@ -14,6 +19,7 @@ function generarExtracto(contenido: string): string {
 }
 
 export default function UltimasPublicaciones() {
+  const { esRecursosHumanos, empresa, departamento } = useAuthRole();
   const [publicaciones, setPublicaciones] = useState<PublicacionMuro[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -24,29 +30,64 @@ export default function UltimasPublicaciones() {
       setIsLoading(true);
       try {
         const supabase = createClient();
+        const ahoraIso = new Date().toISOString();
 
-        const { data, error } = await supabase
+        const userEmpresa = (empresa || "AIF").trim();
+        const userDepartamento = (departamento || "Todos").trim();
+
+        let query = supabase
           .from("muro_publicaciones")
-          .select("*, colaboradores!autor_id(nombre_completo)")
-          .order("created_at", { ascending: false })
-          .limit(3);
+          .select("*, colaboradores!autor_id(nombre_completo)");
+
+        if (!esRecursosHumanos) {
+          query = query
+            .lte("fecha_publicacion", ahoraIso)
+            .or(
+              `empresa_destino.eq.Ambas,empresa_destino.eq."${userEmpresa}",empresa_destino.is.null`
+            )
+            .or(
+              `departamento_destino.eq.Todos,departamento_destino.eq."${userDepartamento}",departamento_destino.is.null`
+            );
+        }
+
+        const { data, error } = await query
+          .order("fecha_publicacion", { ascending: false })
+          .limit(12);
 
         if (!activo) return;
 
         if (!error && data) {
-          setPublicaciones(data as unknown as PublicacionMuro[]);
+          const lista = (data as unknown as PublicacionMuro[]).filter((p) =>
+            esRecursosHumanos
+              ? true
+              : cumpleFiltroAudiencia(p, userEmpresa, userDepartamento)
+          );
+          setPublicaciones(lista.slice(0, 3));
           return;
         }
 
-        // Fallback en caso de que la tabla use fecha_publicacion
-        const fallback = await supabase
+        // Fallback en caso de que la consulta requiera created_at
+        let fallbackQuery = supabase
           .from("muro_publicaciones")
-          .select("*, colaboradores!autor_id(nombre_completo)")
-          .order("fecha_publicacion", { ascending: false })
-          .limit(3);
+          .select("*, colaboradores!autor_id(nombre_completo)");
+
+        if (!esRecursosHumanos) {
+          fallbackQuery = fallbackQuery.lte("fecha_publicacion", ahoraIso);
+        }
+
+        const fallback = await fallbackQuery
+          .order("created_at", { ascending: false })
+          .limit(12);
 
         if (!activo) return;
-        setPublicaciones((fallback.data ?? []) as unknown as PublicacionMuro[]);
+        const listaFallback = (
+          (fallback.data ?? []) as unknown as PublicacionMuro[]
+        ).filter((p) =>
+          esRecursosHumanos
+            ? true
+            : cumpleFiltroAudiencia(p, userEmpresa, userDepartamento)
+        );
+        setPublicaciones(listaFallback.slice(0, 3));
       } finally {
         if (activo) {
           setIsLoading(false);
@@ -59,7 +100,7 @@ export default function UltimasPublicaciones() {
     return () => {
       activo = false;
     };
-  }, []);
+  }, [esRecursosHumanos, empresa, departamento]);
 
   if (isLoading) {
     return (
@@ -103,10 +144,18 @@ export default function UltimasPublicaciones() {
   return (
     <div className="grid h-full flex-1 grid-cols-1 gap-6 md:grid-cols-3">
       {publicaciones.map((pub) => {
-        const fechaRaw = pub.created_at ?? pub.fecha_publicacion ?? null;
+        const fechaRaw = pub.fecha_publicacion ?? pub.created_at ?? null;
         const fechaFormateada = formatearFechaPublicacion(fechaRaw);
         const nombreAutor =
           pub.colaboradores?.nombre_completo?.trim() || "Recursos Humanos";
+        const esProgramado = Boolean(
+          pub.fecha_publicacion &&
+            new Date(pub.fecha_publicacion).getTime() > Date.now()
+        );
+        const alcance = formatearAlcancePublicacion(
+          pub.empresa_destino,
+          pub.departamento_destino
+        );
 
         return (
           <PostCard
@@ -116,7 +165,9 @@ export default function UltimasPublicaciones() {
             title={pub.titulo}
             author={nombreAutor}
             excerpt={generarExtracto(pub.contenido)}
+            alcance={alcance}
             requiereAcuse={Boolean(pub.requiere_acuse)}
+            esProgramado={esProgramado}
           />
         );
       })}

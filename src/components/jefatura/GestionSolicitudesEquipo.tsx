@@ -485,7 +485,8 @@ export default function GestionSolicitudesEquipo() {
                 return (
                   <tr
                     key={solicitud.id}
-                    className="group transition-colors hover:bg-gray-50/70"
+                    id={`solicitud-${solicitud.id}`}
+                    className="group transition-colors hover:bg-gray-50/70 target:bg-brand-beige/40"
                   >
                     {/* 1. Nombre del Colaborador (Sticky row header) */}
                     <th

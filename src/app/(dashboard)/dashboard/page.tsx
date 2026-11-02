@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import DateTimeDisplay from "@/components/dashboard/DateTimeDisplay";
+import NotificacionesProactivasModal from "@/components/dashboard/NotificacionesProactivasModal";
 import UltimasPublicaciones from "@/components/dashboard/UltimasPublicaciones";
 import {
   CheckCircleIcon,
@@ -23,15 +24,8 @@ export default async function DashboardHome() {
 
   const { data: colaborador } = await supabase
     .from("colaboradores")
-    .select("nombre_completo, saldo_vacaciones, rol_sistema")
+    .select("nombre_completo, saldo_vacaciones, rol_sistema, es_jefatura")
     .eq("id", user.id)
-    .maybeSingle();
-
-  const { data: ultimoComunicado } = await supabase
-    .from("muro_publicaciones")
-    .select("id, titulo, contenido")
-    .order("created_at", { ascending: false })
-    .limit(1)
     .maybeSingle();
 
   const nombreCompleto = colaborador?.nombre_completo?.trim() || "";
@@ -48,12 +42,6 @@ export default async function DashboardHome() {
     : "JR";
 
   const saldoVacaciones = colaborador?.saldo_vacaciones ?? 0;
-
-  const extractoDestacado = ultimoComunicado?.contenido
-    ? ultimoComunicado.contenido.length > 120
-      ? `${ultimoComunicado.contenido.substring(0, 120).trimEnd()}...`
-      : ultimoComunicado.contenido
-    : "Consulta los avisos y boletines oficiales publicados recientemente por Recursos Humanos.";
 
   return (
     <div className="flex min-h-full flex-col px-12 py-8">
@@ -133,26 +121,12 @@ export default async function DashboardHome() {
           </div>
         </div>
 
-        {/* Comunicado oficial destacado */}
-        <div className="flex flex-col justify-between rounded-md bg-brand-dark p-6 shadow-sm">
-          <div>
-            <span className="mb-3 block text-[10px] font-bold uppercase tracking-widest text-brand-gold">
-              COMUNICADO OFICIAL
-            </span>
-            <h2 className="mb-3 line-clamp-2 font-serif text-lg font-bold leading-tight text-white">
-              {ultimoComunicado?.titulo || "Muro Corporativo AIF"}
-            </h2>
-            <p className="line-clamp-3 text-xs leading-relaxed text-gray-300">
-              {extractoDestacado}
-            </p>
-          </div>
-          <Link
-            href="/dashboard/muro"
-            className="mt-6 block w-full rounded-md bg-white/10 py-3 text-center text-xs font-semibold text-white transition-colors hover:bg-white/20"
-          >
-            VER EN EL MURO
-          </Link>
-        </div>
+        {/* Últimas notificaciones (reemplaza Comunicado Oficial y controla el overlay con blur) */}
+        <NotificacionesProactivasModal
+          userId={user.id}
+          rolSistema={colaborador?.rol_sistema}
+          esJefatura={Boolean(colaborador?.es_jefatura)}
+        />
       </section>
 
       {/* ACCIÓN 1: Últimas publicaciones con flex-1 flex flex-col para llenar la altura disponible */}

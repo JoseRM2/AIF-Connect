@@ -11,6 +11,8 @@ interface RequestsWorkspaceProps {
   list: ReactNode;
   /** Saldo de vacaciones disponible del colaborador para validar en el formulario. */
   saldoVacaciones?: number;
+  /** Días de vacaciones ya comprometidos en solicitudes pendientes de autorización. */
+  diasVacacionesPendientes?: number;
   userId?: string;
 }
 
@@ -18,6 +20,7 @@ export default function RequestsWorkspace({
   metrics,
   list,
   saldoVacaciones = 0,
+  diasVacacionesPendientes = 0,
   userId,
 }: RequestsWorkspaceProps) {
   const [abierto, setAbierto] = useState(false);
@@ -53,6 +56,7 @@ export default function RequestsWorkspace({
         {abierto && (
           <RequestForm
             saldoVacaciones={saldoVacaciones}
+            diasVacacionesPendientes={diasVacacionesPendientes}
             userId={userId}
             onSubmit={() => setAbierto(false)}
           />

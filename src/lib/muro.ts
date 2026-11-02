@@ -100,3 +100,62 @@ export function formatearContenidoConEnlaces(texto: string): string {
   });
 }
 
+/**
+ * Formatea el alcance de audiencia de un comunicado ("General", "Exclusivo: ROYAL", "AIF - Ventas").
+ */
+export function formatearAlcancePublicacion(
+  empresaDestino?: string | null,
+  departamentoDestino?: string | null
+): string {
+  const emp = (empresaDestino ?? "Ambas").trim() || "Ambas";
+  const dep = (departamentoDestino ?? "Todos").trim() || "Todos";
+
+  const esEmpGeneral = emp.toLowerCase() === "ambas";
+  const esDepGeneral = dep.toLowerCase() === "todos";
+
+  if (esEmpGeneral && esDepGeneral) {
+    return "General";
+  }
+  if (!esEmpGeneral && esDepGeneral) {
+    return `Exclusivo: ${emp}`;
+  }
+  if (esEmpGeneral && !esDepGeneral) {
+    return `General - ${dep}`;
+  }
+  return `${emp} - ${dep}`;
+}
+
+/**
+ * Evalúa si una publicación cumple el filtro de audiencia para el empleado logueado:
+ * - empresa_destino es igual a la empresa del usuario, o es "Ambas" (o nulo/vacío en registros previos)
+ * - departamento_destino es igual al departamento del usuario, o es "Todos" (o nulo/vacío en registros previos)
+ */
+export function cumpleFiltroAudiencia(
+  publicacion: {
+    empresa_destino?: string | null;
+    departamento_destino?: string | null;
+  },
+  userEmpresa?: string | null,
+  userDepartamento?: string | null
+): boolean {
+  const empDestino = (publicacion.empresa_destino ?? "Ambas").trim() || "Ambas";
+  const depDestino =
+    (publicacion.departamento_destino ?? "Todos").trim() || "Todos";
+
+  const empUsuario = (userEmpresa ?? "").trim();
+  const depUsuario = (userDepartamento ?? "").trim();
+
+  const cumpleEmpresa =
+    empDestino.toLowerCase() === "ambas" ||
+    !empUsuario ||
+    empDestino.toLowerCase() === empUsuario.toLowerCase();
+
+  const cumpleDepartamento =
+    depDestino.toLowerCase() === "todos" ||
+    !depUsuario ||
+    depDestino.toLowerCase() === depUsuario.toLowerCase();
+
+  return cumpleEmpresa && cumpleDepartamento;
+}
+
+

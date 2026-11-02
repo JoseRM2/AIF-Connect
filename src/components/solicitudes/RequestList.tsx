@@ -15,7 +15,12 @@ const COLUMNAS: { label: string; className: string }[] = [
  * - Jefe Directo resuelve: "Vacaciones", "Permiso con goce de sueldo", "Permiso sin goce de sueldo".
  */
 function esResolucionPorRH(solicitud: Solicitud): boolean {
-  if (solicitud.tipo === "incapacidad") return true;
+  if (
+    solicitud.tipo === "incapacidad" ||
+    solicitud.tipo === "vacaciones_pagadas"
+  ) {
+    return true;
+  }
   const labelNorm = (solicitud.tipo_label ?? "").trim().toLowerCase();
   return (
     labelNorm.includes("incapacidad") || labelNorm.includes("vacaciones pagadas")
@@ -68,20 +73,20 @@ function EstadoCell({ solicitud }: { solicitud: Solicitud }) {
   );
 
   return (
-    <div role="cell" className="col-span-3 flex flex-col items-end gap-1.5">
+    <div role="cell" className="col-span-3 flex flex-col items-end gap-1">
       <span
-        className={`rounded border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${chip}`}
+        className={`rounded border px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider ${chip}`}
       >
         {label}
       </span>
       <div className="w-28">
-        <div className="flex items-center gap-1.5" aria-hidden="true">
+        <div className="flex items-center gap-1" aria-hidden="true">
           {barras.map((color, i) => (
             <div key={i} className={`h-1 flex-1 rounded-full ${color}`} />
           ))}
         </div>
         <div
-          className="mt-0.5 flex justify-between text-[7px] font-bold uppercase tracking-tighter text-gray-400"
+          className="mt-1 flex justify-between text-[7px] font-bold uppercase tracking-tight text-gray-700"
           aria-hidden="true"
         >
           {pasos.map((paso) => (

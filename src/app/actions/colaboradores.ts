@@ -46,6 +46,48 @@ function generarPasswordSegura(longitud = 16): string {
 }
 const ROL_AUTORIZADO = "Recursos Humanos";
 
+function detectarErrorUnicidad(error: {
+  code?: string;
+  message?: string;
+  details?: string;
+}): string | null {
+  const codigo = (error.code ?? "").trim();
+  const textoCompleto = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+
+  const esUnicidad =
+    codigo === "23505" ||
+    textoCompleto.includes("duplicate key") ||
+    textoCompleto.includes("unique constraint") ||
+    textoCompleto.includes("23505") ||
+    textoCompleto.includes("already exists");
+
+  if (!esUnicidad) return null;
+
+  if (textoCompleto.includes("curp")) {
+    return "Error: El CURP ingresado ya pertenece a otro colaborador";
+  }
+  if (textoCompleto.includes("rfc")) {
+    return "Error: El RFC ingresado ya pertenece a otro colaborador";
+  }
+  if (textoCompleto.includes("nss")) {
+    return "Error: El NSS ingresado ya pertenece a otro colaborador";
+  }
+  if (textoCompleto.includes("id2")) {
+    return "Error: El ID2 ingresado ya pertenece a otro colaborador";
+  }
+  if (textoCompleto.includes("correo") || textoCompleto.includes("email")) {
+    return "Error: El correo electrónico ingresado ya pertenece a otro colaborador";
+  }
+  if (
+    textoCompleto.includes("no_empleado") ||
+    textoCompleto.includes("numero_empleado")
+  ) {
+    return "Error: El No. de Empleado ingresado ya pertenece a otro colaborador";
+  }
+
+  return "Error: Uno de los datos únicos ingresados (RFC, CURP, NSS o ID2) ya pertenece a otro colaborador";
+}
+
 export async function crearColaboradorAction(
   payload: CrearColaboradorPayload
 ): Promise<CrearColaboradorResultado> {
@@ -126,9 +168,14 @@ export async function crearColaboradorAction(
     if (insertError || !colaborador) {
       // Rollback: evitar usuarios huérfanos en Auth
       await supabaseAdmin.auth.admin.deleteUser(userId);
+      const mensajeUnicidad = insertError
+        ? detectarErrorUnicidad(insertError)
+        : null;
       return {
         ok: false,
-        error: `No se pudo registrar el expediente: ${insertError?.message ?? "error desconocido"}`,
+        error:
+          mensajeUnicidad ??
+          `No se pudo registrar el expediente: ${insertError?.message ?? "error desconocido"}`,
       };
     }
 

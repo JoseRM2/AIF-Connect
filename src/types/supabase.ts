@@ -13,7 +13,8 @@ export interface Database {
         Row: {
           id: string;
           nombre_completo: string;
-          nombre?: string;
+          nombre?: string | null;
+          apellidos?: string | null;
           correo_corporativo?: string | null;
           correo?: string | null;
           puesto: string | null;
@@ -40,6 +41,7 @@ export interface Database {
           reclutador?: string | null;
           fecha_ingreso?: string | null;
           fecha_baja?: string | null;
+          motivo_baja?: string | null;
           dia_cumpleanos?: number | null;
           mes_cumpleanos?: string | null;
           sexo?: string | null;
@@ -71,7 +73,8 @@ export interface Database {
         Insert: {
           id?: string;
           nombre_completo: string;
-          nombre?: string;
+          nombre?: string | null;
+          apellidos?: string | null;
           correo_corporativo?: string | null;
           correo?: string | null;
           puesto?: string | null;
@@ -98,6 +101,7 @@ export interface Database {
           reclutador?: string | null;
           fecha_ingreso?: string | null;
           fecha_baja?: string | null;
+          motivo_baja?: string | null;
           dia_cumpleanos?: number | null;
           mes_cumpleanos?: string | null;
           sexo?: string | null;
@@ -129,7 +133,8 @@ export interface Database {
         Update: {
           id?: string;
           nombre_completo?: string;
-          nombre?: string;
+          nombre?: string | null;
+          apellidos?: string | null;
           correo_corporativo?: string | null;
           correo?: string | null;
           puesto?: string | null;
@@ -156,6 +161,7 @@ export interface Database {
           reclutador?: string | null;
           fecha_ingreso?: string | null;
           fecha_baja?: string | null;
+          motivo_baja?: string | null;
           dia_cumpleanos?: number | null;
           mes_cumpleanos?: string | null;
           sexo?: string | null;
@@ -360,6 +366,8 @@ export interface Database {
           imagen_url?: string | null;
           requiere_acuse: boolean;
           fecha_publicacion?: string | null;
+          empresa_destino?: string | null;
+          departamento_destino?: string | null;
           created_at: string;
         };
         Insert: {
@@ -372,6 +380,8 @@ export interface Database {
           imagen_url?: string | null;
           requiere_acuse?: boolean;
           fecha_publicacion?: string | null;
+          empresa_destino?: string | null;
+          departamento_destino?: string | null;
           created_at?: string;
         };
         Update: {
@@ -384,6 +394,8 @@ export interface Database {
           imagen_url?: string | null;
           requiere_acuse?: boolean;
           fecha_publicacion?: string | null;
+          empresa_destino?: string | null;
+          departamento_destino?: string | null;
           created_at?: string;
         };
         Relationships: [

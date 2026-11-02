@@ -121,3 +121,40 @@ export async function subirDocumentosExpediente(
 
   return salida;
 }
+
+/**
+ * Extrae la ruta interna del bucket `expedientes` y obtiene su URL pública
+ * utilizando `supabase.storage.from('expedientes').getPublicUrl(ruta_del_archivo)`.
+ * Devuelve `null` si la columna está vacía (`null`, `undefined` o string vacío).
+ */
+export function obtenerUrlPublicaExpediente(
+  supabase: SupabaseBrowserClient,
+  rutaOUrl: string | null | undefined
+): string | null {
+  const limpio = (rutaOUrl ?? "").trim();
+  if (!limpio) return null;
+
+  const marcadorBucket = `/storage/v1/object/public/${BUCKET_EXPEDIENTES}/`;
+  let rutaArchivo = limpio;
+
+  if (limpio.includes(marcadorBucket)) {
+    const idx = limpio.indexOf(marcadorBucket);
+    rutaArchivo = decodeURIComponent(
+      limpio.slice(idx + marcadorBucket.length)
+    );
+  } else if (/^https?:\/\//i.test(limpio)) {
+    // Si ya es una URL externa completa que no sigue el patrón estándar, retornarla tal cual
+    return limpio;
+  } else {
+    rutaArchivo = limpio.replace(/^\/+/, "");
+  }
+
+  if (!rutaArchivo) return null;
+
+  const { data } = supabase.storage
+    .from(BUCKET_EXPEDIENTES)
+    .getPublicUrl(rutaArchivo);
+
+  return data?.publicUrl?.trim() ? data.publicUrl : null;
+}
+

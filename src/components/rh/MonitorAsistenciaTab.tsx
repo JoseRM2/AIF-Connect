@@ -779,7 +779,11 @@ export default function MonitorAsistenciaTab() {
                     ESTATUS_TICKET_CHIP.Abierto;
 
                   return (
-                    <tr key={ticket.id} className="hover:bg-gray-50/50">
+                    <tr
+                      key={ticket.id}
+                      id={`ticket-${ticket.id}`}
+                      className="hover:bg-gray-50/50 target:bg-brand-beige/40"
+                    >
                       <td className="px-6 py-4">
                         <p className="text-xs font-bold text-gray-900">
                           {nombreEmpleado}

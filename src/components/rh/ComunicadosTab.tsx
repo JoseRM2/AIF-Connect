@@ -6,7 +6,20 @@ import {
   AlertTriangleIcon,
   CheckCircleIcon,
 } from "@/components/ui/icons";
+import { formatearAlcancePublicacion } from "@/lib/muro";
 import { createClient } from "@/lib/supabase/client";
+
+const DEPARTAMENTOS_CORPORATIVOS_BASE = [
+  "Administración",
+  "Contabilidad",
+  "Dirección",
+  "Fiscal",
+  "Legal",
+  "Operaciones",
+  "Recursos Humanos",
+  "TI / Sistemas",
+  "Ventas",
+] as const;
 
 export interface PublicacionMuroRow {
   id: string;
@@ -16,6 +29,8 @@ export interface PublicacionMuroRow {
   requiere_acuse: boolean;
   imagen_url?: string | null;
   fecha_publicacion?: string | null;
+  empresa_destino?: string | null;
+  departamento_destino?: string | null;
   created_at?: string | null;
 }
 
@@ -73,6 +88,12 @@ function obtenerExtracto(texto: string, maxCaracteres = 220): string {
 export default function ComunicadosTab() {
   const [titulo, setTitulo] = useState("");
   const [contenido, setContenido] = useState("");
+  const [empresaDestino, setEmpresaDestino] = useState<"Ambas" | "AIF" | "ROYAL">("Ambas");
+  const [departamentoDestino, setDepartamentoDestino] = useState("Todos");
+  const [departamentosDisponibles, setDepartamentosDisponibles] = useState<string[]>([
+    ...DEPARTAMENTOS_CORPORATIVOS_BASE,
+  ]);
+  const [fechaProgramada, setFechaProgramada] = useState("");
   const [requiereAcuse, setRequiereAcuse] = useState(false);
   const [imagenArchivo, setImagenArchivo] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -122,17 +143,24 @@ export default function ComunicadosTab() {
       const primeraConsulta = await supabase
         .from("muro_publicaciones")
         .select("*")
-        .order("created_at", { ascending: false });
+        .order("fecha_publicacion", { ascending: false });
 
       if (!primeraConsulta.error && primeraConsulta.data) {
-        setPublicaciones(primeraConsulta.data as PublicacionMuroRow[]);
+        const ordenadas = [...(primeraConsulta.data as PublicacionMuroRow[])].sort(
+          (a, b) => {
+            const fA = obtenerFechaPublicacion(a) ?? "";
+            const fB = obtenerFechaPublicacion(b) ?? "";
+            return fB.localeCompare(fA);
+          }
+        );
+        setPublicaciones(ordenadas);
         return;
       }
 
       const segundaConsulta = await supabase
         .from("muro_publicaciones")
         .select("*")
-        .order("fecha_publicacion", { ascending: false });
+        .order("created_at", { ascending: false });
 
       if (segundaConsulta.error) {
         setFetchError(
@@ -201,6 +229,44 @@ export default function ComunicadosTab() {
     fetchPublicaciones();
     fetchComentariosPendientes();
   }, [fetchPublicaciones, fetchComentariosPendientes]);
+
+  // Cargar dinámicamente la lista de departamentos desde `colaboradores`
+  useEffect(() => {
+    let activo = true;
+    async function cargarDepartamentos() {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from("colaboradores")
+          .select("departamento");
+
+        if (!activo || !data) return;
+
+        const mapaUnicos = new Map<string, string>();
+        for (const base of DEPARTAMENTOS_CORPORATIVOS_BASE) {
+          mapaUnicos.set(base.toLowerCase(), base);
+        }
+
+        for (const row of data) {
+          const dep = (row.departamento ?? "").trim();
+          if (dep && dep.toLowerCase() !== "todos") {
+            mapaUnicos.set(dep.toLowerCase(), dep);
+          }
+        }
+
+        const listaOrdenada = Array.from(mapaUnicos.values()).sort((a, b) =>
+          a.localeCompare(b, "es")
+        );
+        setDepartamentosDisponibles(listaOrdenada);
+      } catch {
+        // Mantener catálogo base si ocurre algún error de red
+      }
+    }
+    cargarDepartamentos();
+    return () => {
+      activo = false;
+    };
+  }, []);
 
   // Cerrar modal de acuses con Escape
   useEffect(() => {
@@ -288,6 +354,10 @@ export default function ComunicadosTab() {
 
       setEtapaEnvio("saving");
 
+      const fechaPublicacionIso = fechaProgramada.trim()
+        ? new Date(fechaProgramada).toISOString()
+        : new Date().toISOString();
+
       const { data: insertada, error: insertError } = await supabase
         .from("muro_publicaciones")
         .insert({
@@ -296,6 +366,9 @@ export default function ComunicadosTab() {
           requiere_acuse: requiereAcuse,
           autor_id: user.id,
           imagen_url: imagenUrlPublica,
+          fecha_publicacion: fechaPublicacionIso,
+          empresa_destino: empresaDestino,
+          departamento_destino: departamentoDestino,
         })
         .select("*")
         .maybeSingle();
@@ -308,12 +381,21 @@ export default function ComunicadosTab() {
 
       setTitulo("");
       setContenido("");
+      setEmpresaDestino("Ambas");
+      setDepartamentoDestino("Todos");
+      setFechaProgramada("");
       setRequiereAcuse(false);
       limpiarArchivoSeleccionado();
       setMensajeExito(tituloLimpio);
 
       if (insertada) {
-        setPublicaciones((prev) => [insertada as PublicacionMuroRow, ...prev]);
+        setPublicaciones((prev) =>
+          [insertada as PublicacionMuroRow, ...prev].sort((a, b) => {
+            const fA = obtenerFechaPublicacion(a) ?? "";
+            const fB = obtenerFechaPublicacion(b) ?? "";
+            return fB.localeCompare(fA);
+          })
+        );
       } else {
         await fetchPublicaciones();
       }
@@ -521,39 +603,124 @@ export default function ComunicadosTab() {
             />
           </div>
 
-          {/* Campo: Imagen Adjunta Opcional */}
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="comunicado-imagen"
-              className="text-[9px] font-bold uppercase tracking-widest text-gray-500"
-            >
-              IMAGEN ADJUNTA (OPCIONAL)
-            </label>
-            <div className="flex flex-wrap items-center gap-3">
-              <input
-                ref={fileInputRef}
-                id="comunicado-imagen"
-                type="file"
-                accept="image/*"
+          {/* Selectores de Segmentación de Audiencia: Empresa y Departamento */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Selector 1: Empresa Destino */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="comunicado-empresa-destino"
+                className="text-[9px] font-bold uppercase tracking-widest text-gray-500"
+              >
+                EMPRESA DESTINO *
+              </label>
+              <select
+                id="comunicado-empresa-destino"
                 disabled={isSubmitting}
-                onChange={handleFileChange}
-                className="flex-1 rounded-sm border border-gray-200 bg-brand-surface px-3.5 py-2 text-xs text-gray-700 file:mr-3 file:cursor-pointer file:rounded-sm file:border-0 file:bg-brand-dark file:px-3 file:py-1 file:text-[10px] file:font-bold file:uppercase file:tracking-widest file:text-brand-gold hover:file:bg-brand-dark/90 focus:border-brand-gold focus:outline-none disabled:opacity-60"
+                value={empresaDestino}
+                onChange={(e) => {
+                  setMensajeExito(null);
+                  setMensajeError(null);
+                  setEmpresaDestino(
+                    e.target.value as "Ambas" | "AIF" | "ROYAL"
+                  );
+                }}
+                className="w-full rounded-sm border border-gray-200 bg-brand-surface px-3.5 py-2.5 text-xs font-medium text-gray-800 focus:border-brand-gold focus:outline-none disabled:opacity-60"
+              >
+                <option value="Ambas">Ambas (AIF y ROYAL)</option>
+                <option value="AIF">AIF</option>
+                <option value="ROYAL">ROYAL</option>
+              </select>
+            </div>
+
+            {/* Selector 2: Departamento Destino */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="comunicado-departamento-destino"
+                className="text-[9px] font-bold uppercase tracking-widest text-gray-500"
+              >
+                DEPARTAMENTO DESTINO *
+              </label>
+              <select
+                id="comunicado-departamento-destino"
+                disabled={isSubmitting}
+                value={departamentoDestino}
+                onChange={(e) => {
+                  setMensajeExito(null);
+                  setMensajeError(null);
+                  setDepartamentoDestino(e.target.value);
+                }}
+                className="w-full rounded-sm border border-gray-200 bg-brand-surface px-3.5 py-2.5 text-xs font-medium text-gray-800 focus:border-brand-gold focus:outline-none disabled:opacity-60"
+              >
+                <option value="Todos">Todos los departamentos</option>
+                {departamentosDisponibles.map((dep) => (
+                  <option key={dep} value={dep}>
+                    {dep}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Campo: Programar publicación (Opcional) e Imagen Adjunta */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="comunicado-fecha-programacion"
+                className="text-[9px] font-bold uppercase tracking-widest text-gray-500"
+              >
+                PROGRAMAR PUBLICACIÓN (OPCIONAL)
+              </label>
+              <input
+                id="comunicado-fecha-programacion"
+                type="datetime-local"
+                disabled={isSubmitting}
+                value={fechaProgramada}
+                onChange={(e) => {
+                  setMensajeExito(null);
+                  setMensajeError(null);
+                  setFechaProgramada(e.target.value);
+                }}
+                className="w-full rounded-sm border border-gray-200 bg-brand-surface px-3.5 py-2 text-xs text-gray-800 focus:border-brand-gold focus:outline-none disabled:opacity-60"
               />
-              {imagenArchivo && (
-                <div className="flex items-center gap-2 rounded-sm border border-gray-200 bg-brand-beige/40 px-3 py-1.5 text-[11px] font-medium text-gray-700">
-                  <span className="max-w-[200px] truncate">
-                    {imagenArchivo.name}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={isSubmitting}
-                    onClick={limpiarArchivoSeleccionado}
-                    className="text-[10px] font-bold uppercase tracking-wider text-status-danger hover:underline"
-                  >
-                    Quitar
-                  </button>
-                </div>
-              )}
+              <span className="text-[10px] text-gray-400">
+                Si lo dejas vacío, el comunicado se publicará inmediatamente.
+              </span>
+            </div>
+
+            {/* Campo: Imagen Adjunta Opcional */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="comunicado-imagen"
+                className="text-[9px] font-bold uppercase tracking-widest text-gray-500"
+              >
+                IMAGEN ADJUNTA (OPCIONAL)
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <input
+                  ref={fileInputRef}
+                  id="comunicado-imagen"
+                  type="file"
+                  accept="image/*"
+                  disabled={isSubmitting}
+                  onChange={handleFileChange}
+                  className="flex-1 rounded-sm border border-gray-200 bg-brand-surface px-3.5 py-2 text-xs text-gray-700 file:mr-3 file:cursor-pointer file:rounded-sm file:border-0 file:bg-brand-dark file:px-3 file:py-1 file:text-[10px] file:font-bold file:uppercase file:tracking-widest file:text-brand-gold hover:file:bg-brand-dark/90 focus:border-brand-gold focus:outline-none disabled:opacity-60"
+                />
+                {imagenArchivo && (
+                  <div className="flex items-center gap-2 rounded-sm border border-gray-200 bg-brand-beige/40 px-3 py-1.5 text-[11px] font-medium text-gray-700">
+                    <span className="max-w-[200px] truncate">
+                      {imagenArchivo.name}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={limpiarArchivoSeleccionado}
+                      className="text-[10px] font-bold uppercase tracking-wider text-status-danger hover:underline"
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -671,7 +838,8 @@ export default function ComunicadosTab() {
               return (
                 <article
                   key={item.id}
-                  className="flex flex-wrap items-center justify-between gap-4 px-6 py-5"
+                  id={`comentario-${item.id}`}
+                  className="flex flex-wrap items-center justify-between gap-4 px-6 py-5 target:bg-brand-beige/40"
                 >
                   <div className="flex flex-col gap-1.5">
                     <div className="flex flex-wrap items-center gap-2">
@@ -783,9 +951,17 @@ export default function ComunicadosTab() {
         ) : (
           <div className="grid grid-cols-1 gap-4 p-6 md:grid-cols-2">
             {publicaciones.map((pub) => {
-              const fechaStr = formatearFechaComunicado(
-                obtenerFechaPublicacion(pub)
+              const fechaPubRaw = obtenerFechaPublicacion(pub);
+              const fechaStr = formatearFechaComunicado(fechaPubRaw);
+              const esProgramado = Boolean(
+                pub.fecha_publicacion &&
+                  new Date(pub.fecha_publicacion).getTime() > Date.now()
               );
+              const alcanceBadge = formatearAlcancePublicacion(
+                pub.empresa_destino,
+                pub.departamento_destino
+              );
+
               return (
                 <article
                   key={pub.id}
@@ -797,7 +973,15 @@ export default function ComunicadosTab() {
                         {fechaStr}
                       </span>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="inline-flex items-center rounded-sm border border-brand-gold/40 bg-brand-beige/60 px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-brand-dark">
+                          {alcanceBadge}
+                        </span>
+                        {esProgramado && (
+                          <span className="inline-flex items-center gap-1 rounded-sm border border-brand-gold bg-brand-dark px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-brand-gold">
+                            ● PROGRAMADO
+                          </span>
+                        )}
                         {pub.imagen_url && (
                           <span className="inline-flex items-center rounded-sm border border-gray-200 bg-brand-beige/60 px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-gray-600">
                             CON IMAGEN

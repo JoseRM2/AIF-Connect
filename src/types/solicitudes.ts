@@ -8,6 +8,7 @@
 
 export type TipoSolicitud =
   | "vacaciones"
+  | "vacaciones_pagadas"
   | "permiso_con_goce"
   | "permiso_sin_goce"
   | "incapacidad";

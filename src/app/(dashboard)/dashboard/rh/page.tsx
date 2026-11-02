@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { KeyboardEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import TopBar from "@/components/layout/TopBar";
 import ComunicadosTab from "@/components/rh/ComunicadosTab";
 import DirectorioTab from "@/components/rh/DirectorioTab";
@@ -17,8 +18,27 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "comunicados", label: "COMUNICADOS & MURO" },
 ];
 
+function esTabValida(valor: string | null): valor is TabId {
+  return (
+    valor === "expedientes" ||
+    valor === "solicitudes" ||
+    valor === "asistencia" ||
+    valor === "comunicados"
+  );
+}
+
 export default function RhPage() {
-  const [activeTab, setActiveTab] = useState<TabId>("expedientes");
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState<TabId>(() =>
+    esTabValida(tabParam) ? tabParam : "expedientes"
+  );
+
+  useEffect(() => {
+    if (esTabValida(tabParam)) {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
 
   // Navegación con flechas entre pestañas (patrón WAI-ARIA de tabs).
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -37,10 +57,10 @@ export default function RhPage() {
       <div className="flex flex-col px-8 py-8">
         <header className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-brand-dark/10 pb-3">
           <div>
-            <h1 className="font-serif text-3xl font-black text-gray-900">
+            <h1 className="font-serif text-2xl font-black text-gray-900">
               Administración RH
             </h1>
-            <p className="mt-1 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="mt-1 text-[8px] font-bold uppercase tracking-widest text-gray-700">
               GESTIÓN INTEGRAL DE PERSONAL, CONTROL DE GEOCERCAS Y ASISTENCIA.
             </p>
           </div>
@@ -49,7 +69,7 @@ export default function RhPage() {
             role="tablist"
             aria-label="Secciones de administración RH"
             onKeyDown={handleKeyDown}
-            className="flex flex-wrap gap-1"
+            className="flex flex-wrap gap-2"
           >
             {TABS.map(({ id, label }) => {
               const activa = id === activeTab;
@@ -63,10 +83,10 @@ export default function RhPage() {
                   aria-controls={`panel-${id}`}
                   tabIndex={activa ? 0 : -1}
                   onClick={() => setActiveTab(id)}
-                  className={`rounded-sm px-3.5 py-2 text-[8px] font-bold uppercase tracking-widest transition-colors ${
+                  className={`rounded-sm px-3 py-1.5 text-[8px] font-bold uppercase tracking-wider transition-colors ${
                     activa
-                      ? "bg-brand-dark text-brand-gold"
-                      : "bg-brand-dark/5 text-gray-600 hover:bg-brand-dark/10"
+                      ? "bg-brand-dark text-brand-gold shadow-sm"
+                      : "border border-gray-300 bg-brand-surface text-gray-800 hover:bg-brand-beige/60"
                   }`}
                 >
                   {label}

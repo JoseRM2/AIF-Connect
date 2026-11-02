@@ -17,11 +17,28 @@ const config: Config = {
         "brand-beige": "#E4DED5", // Beige cálido de la captura: canvas general, navbar, fondos secundarios
         "brand-surface": "#FFFFFF", // Tarjetas, paneles, tablas, modales
 
-        // Estados semánticos (valores de la paleta por defecto de Tailwind)
-        "status-success": { DEFAULT: colors.emerald[500], dark: colors.emerald[700] }, // En zona, a tiempo, resuelto
-        "status-danger": { DEFAULT: colors.rose[500], dark: colors.rose[700] }, // Fuera de rango, faltas, eliminar
-        "status-warning": { DEFAULT: colors.amber[500], dark: colors.amber[800] }, // Retardo, pendiente de revisión
-        "status-info": { DEFAULT: colors.blue[600], dark: colors.blue[800] }, // Home Office
+        // Estados semánticos con contraste reforzado (>= 4.5:1 sobre fondos claros)
+        "status-success": {
+          DEFAULT: colors.emerald[700],
+          dark: colors.emerald[800],
+        }, // En zona, a tiempo, resuelto
+        "status-danger": {
+          DEFAULT: colors.rose[700],
+          dark: colors.rose[800],
+        }, // Fuera de rango, faltas, eliminar
+        "status-warning": {
+          DEFAULT: colors.amber[700],
+          dark: colors.amber[900],
+        }, // Retardo, pendiente de revisión
+        "status-info": {
+          DEFAULT: colors.blue[700],
+          dark: colors.blue[900],
+        }, // Home Office
+      },
+      fontSize: {
+        xs: ["0.75rem", { lineHeight: "1.4" }], // 12px (+1px)
+        sm: ["0.875rem", { lineHeight: "1.45" }], // 14px (+1px)
+        base: ["0.9375rem", { lineHeight: "1.5" }], // 15px (+1px)
       },
       fontFamily: {
         sans: ["var(--font-sans)", ...defaultTheme.fontFamily.sans],

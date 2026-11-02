@@ -13,6 +13,9 @@ import type {
 
 function normalizarTipoSolicitud(raw: string | null | undefined): TipoSolicitud {
   const limpio = (raw ?? "").toLowerCase().trim();
+  if (limpio.includes("pagadas") || limpio === "vacaciones_pagadas") {
+    return "vacaciones_pagadas";
+  }
   if (limpio.includes("sin goce") || limpio === "permiso_sin_goce") {
     return "permiso_sin_goce";
   }
@@ -49,6 +52,20 @@ function normalizarEstatusSolicitud(
     return "Rechazado";
   }
   return "Pendiente_Jefe";
+}
+
+function calcularDiasNaturalesUtc(
+  fechaInicio: string | null | undefined,
+  fechaFin: string | null | undefined
+): number {
+  if (!fechaInicio || !fechaFin) return 0;
+  const [y1, m1, d1] = fechaInicio.split("-").map(Number);
+  const [y2, m2, d2] = fechaFin.split("-").map(Number);
+  if (!y1 || !m1 || !d1 || !y2 || !m2 || !d2) return 0;
+  const inicioUtc = Date.UTC(y1, m1 - 1, d1);
+  const finUtc = Date.UTC(y2, m2 - 1, d2);
+  if (finUtc < inicioUtc) return 0;
+  return Math.round((finUtc - inicioUtc) / 86_400_000) + 1;
 }
 
 export default async function SolicitudesPage() {
@@ -100,9 +117,28 @@ export default async function SolicitudesPage() {
     })
   );
 
+  // Días ya comprometidos en solicitudes de "Vacaciones" pendientes de autorización
+  const diasVacacionesPendientes = (filasSolicitudes ?? []).reduce(
+    (acum, fila) => {
+      const tipoRaw = (fila.tipo_solicitud ?? "").trim().toLowerCase();
+      const estatusNorm = normalizarEstatusSolicitud(fila.estatus);
+      if (
+        tipoRaw === "vacaciones" &&
+        (estatusNorm === "Pendiente_Jefe" || estatusNorm === "Pendiente_RH")
+      ) {
+        return (
+          acum + calcularDiasNaturalesUtc(fila.fecha_inicio, fila.fecha_fin)
+        );
+      }
+      return acum;
+    },
+    0
+  );
+
   return (
     <RequestsWorkspace
       saldoVacaciones={saldoDias}
+      diasVacacionesPendientes={diasVacacionesPendientes}
       userId={user.id}
       metrics={<BalanceCards saldo={saldoReal} />}
       list={

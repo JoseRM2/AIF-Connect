@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { enviarComentarioMuroAction } from "@/app/actions/muro";
 import { CheckCircleIcon, MessageSquareIcon } from "@/components/ui/icons";
 import {
+  formatearAlcancePublicacion,
   formatearContenidoConEnlaces,
   formatearFechaPublicacion,
   partesFecha,
@@ -179,11 +181,19 @@ export default function PostCard({
   const [errorInteraccion, setErrorInteraccion] = useState<string | null>(null);
 
   const fechaBase =
-    publicacion.created_at ?? publicacion.fecha_publicacion ?? null;
+    publicacion.fecha_publicacion ?? publicacion.created_at ?? null;
+  const esProgramado = Boolean(
+    publicacion.fecha_publicacion &&
+      new Date(publicacion.fecha_publicacion).getTime() > Date.now()
+  );
   const { dia, mes } = partesFecha(fechaBase);
   const fechaAmigable = formatearFechaPublicacion(fechaBase);
   const nombreAutor =
     publicacion.colaboradores?.nombre_completo?.trim() || "Recursos Humanos";
+  const alcancePublicacion = formatearAlcancePublicacion(
+    publicacion.empresa_destino,
+    publicacion.departamento_destino
+  );
 
   const contenidoHtmlSeguro = formatearContenidoConEnlaces(
     publicacion.contenido
@@ -426,26 +436,25 @@ export default function PostCard({
     setErrorInteraccion(null);
 
     try {
-      const supabase = createClient();
-      const targetUserId = await resolverUserId();
-
-      if (!targetUserId) {
-        setErrorInteraccion("Inicia sesión para enviar un comentario.");
-        return;
-      }
-
-      const { error } = await supabase.from("muro_interacciones").insert({
-        publicacion_id: publicacion.id,
-        colaborador_id: targetUserId,
-        tipo_interaccion: "Comentario",
-        contenido_comentario: limpio,
-        estatus_moderacion: "Pendiente",
+      const resultado = await enviarComentarioMuroAction({
+        publicacionId: publicacion.id,
+        contenido: limpio,
       });
 
-      if (error) {
-        setErrorInteraccion(`Error al enviar comentario: ${error.message}`);
+      if (!resultado.ok) {
+        setErrorInteraccion(`Error al enviar comentario: ${resultado.error}`);
         return;
       }
+
+      setInteracciones((prev) => {
+        const yaExiste = prev.some((i) => i.id === resultado.interaccion.id);
+        if (yaExiste) {
+          return prev.map((i) =>
+            i.id === resultado.interaccion.id ? resultado.interaccion : i
+          );
+        }
+        return [...prev, resultado.interaccion];
+      });
 
       setTextoComentario("");
       setComentarioEnviadoRevision(true);
@@ -483,6 +492,14 @@ export default function PostCard({
               <span className="rounded-sm bg-brand-dark px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-brand-gold">
                 COMUNICADO OFICIAL
               </span>
+              <span className="inline-flex items-center rounded-sm border border-brand-gold/40 bg-brand-beige/60 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-brand-dark">
+                {alcancePublicacion}
+              </span>
+              {esProgramado && (
+                <span className="inline-flex items-center gap-1 rounded-sm border border-brand-gold bg-brand-beige/70 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-brand-dark">
+                  ● PROGRAMADO
+                </span>
+              )}
               <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
                 POR: {nombreAutor}
               </span>
@@ -499,13 +516,13 @@ export default function PostCard({
           </div>
 
           {/* Título */}
-          <h2 className="mb-2.5 font-serif text-xl font-bold leading-snug text-gray-900">
+          <h2 className="mb-3 font-serif text-2xl font-bold leading-snug text-gray-900">
             {publicacion.titulo}
           </h2>
 
           {/* Contenido respetando saltos de línea y convirtiendo URLs en enlaces clickeables seguros */}
           <div
-            className="whitespace-pre-wrap break-words text-xs leading-relaxed text-gray-700"
+            className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800"
             dangerouslySetInnerHTML={{ __html: contenidoHtmlSeguro }}
           />
 

@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import { obtenerReporteVacacionesAction } from "@/app/actions/reportes";
+import VisorDocumentoExpedienteModal from "@/components/rh/VisorDocumentoExpedienteModal";
 import { DownloadIcon } from "@/components/ui/icons";
+import { obtenerUrlPublicaExpediente } from "@/lib/storage/expedientes";
 import { createClient } from "@/lib/supabase/client";
 import type { Empleado } from "@/types/rh";
 
@@ -15,7 +18,7 @@ type FilaReporte = Record<string, string | number>;
 const COLUMNAS_PREVIEW: Record<TipoReporteRH, string[] | null> = {
   Empleados: [
     "No. Empleado",
-    "Nombre del Empleado",
+    "Nombre Completo",
     "Correo Corporativo",
     "Empresa",
     "Departamento",
@@ -45,9 +48,9 @@ const MESES_CORTOS = [
 ] as const;
 
 const LABEL =
-  "mb-1.5 block text-[8px] font-bold uppercase tracking-widest text-gray-400";
+  "mb-1 block text-[8px] font-bold uppercase tracking-wider text-gray-800";
 const CONTROL =
-  "h-10 w-full rounded-sm border border-gray-200 bg-brand-surface px-3 text-xs text-gray-800 transition-colors focus:border-brand-dark focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400";
+  "h-9 w-full rounded-sm border border-gray-300 bg-brand-surface px-3 text-xs font-medium text-gray-900 transition-colors focus:border-brand-dark focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500";
 
 function obtenerRangoMesActual(): { inicio: string; fin: string } {
   const hoy = new Date();
@@ -133,12 +136,34 @@ interface ColaboradorJoin {
   id?: string;
   nombre_completo?: string | null;
   nombre?: string | null;
+  apellidos?: string | null;
   correo_corporativo?: string | null;
   correo?: string | null;
   empresa?: string | null;
   puesto?: string | null;
   departamento?: string | null;
   saldo_vacaciones?: number | null;
+  comprobante_estudios_url?: string | null;
+  carta_recomendacion_url?: string | null;
+}
+
+interface ColaboradorFiltroOption {
+  id: string;
+  nombreCompleto: string;
+  departamento: string;
+  empresa: string;
+  comprobanteEstudiosUrl: string | null;
+  cartaRecomendacionUrl: string | null;
+}
+
+function construirNombreCompletoReporte(colaborador: {
+  nombre?: string | null;
+  apellidos?: string | null;
+  nombre_completo?: string | null;
+}): string {
+  const concatenado = `${colaborador.nombre ?? ""} ${colaborador.apellidos ?? ""}`.trim();
+  if (concatenado) return concatenado;
+  return (colaborador.nombre_completo ?? "").trim() || "Sin nombre";
 }
 
 function extraerColaboradorJoin(raw: unknown): ColaboradorJoin {
@@ -161,6 +186,18 @@ export default function ReporteEmpleados({
 
   const [tipoReporte, setTipoReporte] = useState<TipoReporteRH>("Empleados");
   const [empresa, setEmpresa] = useState<FiltroEmpresaReporte>("Todas");
+  const [departamentoFiltro, setDepartamentoFiltro] = useState<string>("Todos");
+  const [colaboradorId, setColaboradorId] = useState<string>("");
+  const [busquedaColaborador, setBusquedaColaborador] = useState<string>("");
+  const [comboboxAbierto, setComboboxAbierto] = useState<boolean>(false);
+  const comboboxRef = useRef<HTMLDivElement | null>(null);
+
+  const [catalogoColaboradores, setCatalogoColaboradores] = useState<
+    ColaboradorFiltroOption[]
+  >([]);
+  const [visorColaboradorActivo, setVisorColaboradorActivo] =
+    useState<ColaboradorFiltroOption | null>(null);
+
   const [fechaInicio, setFechaInicio] = useState<string>(rangoInicial.inicio);
   const [fechaFin, setFechaFin] = useState<string>(rangoInicial.fin);
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -175,6 +212,114 @@ export default function ReporteEmpleados({
   const requiereRangoFechas =
     tipoReporte === "Asistencia" || tipoReporte === "Vacaciones";
 
+  // Cargar catálogo dinámico de colaboradores y áreas/departamentos desde Supabase
+  useEffect(() => {
+    let activo = true;
+    async function cargarCatalogoFiltros() {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from("colaboradores")
+          .select("*")
+          .order("nombre_completo", { ascending: true });
+
+        if (!activo || !data) return;
+
+        const opciones: ColaboradorFiltroOption[] = data.map((c) => ({
+          id: c.id,
+          nombreCompleto: construirNombreCompletoReporte(c),
+          departamento: (c.departamento ?? "General").trim() || "General",
+          empresa: (c.empresa ?? "AIF").trim().toUpperCase(),
+          comprobanteEstudiosUrl: c.comprobante_estudios_url ?? null,
+          cartaRecomendacionUrl: c.carta_recomendacion_url ?? null,
+        }));
+
+        opciones.sort((a, b) =>
+          a.nombreCompleto.localeCompare(b.nombreCompleto, "es")
+        );
+        setCatalogoColaboradores(opciones);
+      } catch {
+        // Fallback silencioso a la prop `empleados`
+      }
+    }
+    cargarCatalogoFiltros();
+    return () => {
+      activo = false;
+    };
+  }, [empleados]);
+
+  // Cerrar el Combobox de Colaborador Específico al hacer clic fuera
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        comboboxRef.current &&
+        !comboboxRef.current.contains(e.target as Node)
+      ) {
+        setComboboxAbierto(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const opcionesColaboradores = useMemo<ColaboradorFiltroOption[]>(() => {
+    if (catalogoColaboradores.length > 0) return catalogoColaboradores;
+    return empleados.map((e) => ({
+      id: e.id,
+      nombreCompleto: e.nombre,
+      departamento: e.departamento || "General",
+      empresa: e.empresa || "AIF",
+      comprobanteEstudiosUrl: null,
+      cartaRecomendacionUrl: null,
+    }));
+  }, [catalogoColaboradores, empleados]);
+
+  const departamentosDisponibles = useMemo<string[]>(() => {
+    const mapa = new Map<string, string>();
+    for (const c of opcionesColaboradores) {
+      const dep = c.departamento.trim();
+      if (dep && dep.toLowerCase() !== "todos") {
+        mapa.set(dep.toLowerCase(), dep);
+      }
+    }
+    return Array.from(mapa.values()).sort((a, b) => a.localeCompare(b, "es"));
+  }, [opcionesColaboradores]);
+
+  const colaboradoresFiltradosCombobox = useMemo<
+    ColaboradorFiltroOption[]
+  >(() => {
+    const termino = busquedaColaborador.trim().toLowerCase();
+    return opcionesColaboradores.filter((c) => {
+      if (empresa !== "Todas" && c.empresa !== empresa) return false;
+      if (
+        departamentoFiltro !== "Todos" &&
+        c.departamento.toLowerCase() !== departamentoFiltro.toLowerCase()
+      ) {
+        return false;
+      }
+      if (!termino) return true;
+      return c.nombreCompleto.toLowerCase().includes(termino);
+    });
+  }, [
+    opcionesColaboradores,
+    empresa,
+    departamentoFiltro,
+    busquedaColaborador,
+  ]);
+
+  const colaboradorSeleccionadoObj = useMemo(
+    () => opcionesColaboradores.find((c) => c.id === colaboradorId) ?? null,
+    [opcionesColaboradores, colaboradorId]
+  );
+
+  const mapaColaboradorPorNombre = useMemo(() => {
+    const mapa = new Map<string, ColaboradorFiltroOption>();
+    for (const c of opcionesColaboradores) {
+      mapa.set(c.nombreCompleto.toLowerCase(), c);
+    }
+    return mapa;
+  }, [opcionesColaboradores]);
+
   // Consulta a Supabase y transformación a filas legibles.
   // Compartida por la vista previa en pantalla y la exportación a Excel.
   const consultarFilas = async (): Promise<FilaReporte[]> => {
@@ -182,16 +327,21 @@ export default function ReporteEmpleados({
     let filasExcel: FilaReporte[] = [];
 
     if (tipoReporte === "Empleados") {
-      let query = supabase
-        .from("colaboradores")
-        .select("*")
-        .order("nombre_completo", { ascending: true });
+      let query = supabase.from("colaboradores").select("*");
 
       if (empresa !== "Todas") {
         query = query.eq("empresa", empresa);
       }
+      if (departamentoFiltro !== "Todos") {
+        query = query.eq("departamento", departamentoFiltro);
+      }
+      if (colaboradorId) {
+        query = query.eq("id", colaboradorId);
+      }
 
-      const { data, error } = await query;
+      const { data, error } = await query.order("nombre_completo", {
+        ascending: true,
+      });
 
       if (error) {
         throw new Error(error.message);
@@ -200,95 +350,111 @@ export default function ReporteEmpleados({
       const registros = data ?? [];
 
       if (registros.length > 0) {
-        filasExcel = registros.map((item) => ({
-          // Identificación y acceso
-          "No. Empleado": textoExcel(item.no_empleado, "S/N"),
-          "Nombre del Empleado": textoExcel(
-            item.nombre_completo || item.nombre,
-            "Sin nombre"
-          ),
-          "Correo Corporativo": textoExcel(
-            item.correo_corporativo || item.correo
-          ),
-          Empresa: textoExcel(item.empresa, "AIF").toUpperCase(),
-          Estatus: textoExcel(item.estatus, "Activo"),
-          "Rol del Sistema": textoExcel(item.rol_sistema, "Colaborador"),
-          AnyDesk: textoExcel(item.anydesk),
-          "Teléfono de Oficina": textoExcel(item.tel_oficina),
-          "Extensión": textoExcel(item.ext_oficina),
+        filasExcel = registros.map((item) => {
+          const urlComprobantePublica =
+            obtenerUrlPublicaExpediente(
+              supabase,
+              item.comprobante_estudios_url
+            ) ?? "";
+          const urlCartaPublica =
+            obtenerUrlPublicaExpediente(
+              supabase,
+              item.carta_recomendacion_url
+            ) ?? "";
 
-          // Corporativo
-          Departamento: textoExcel(item.departamento, "General"),
-          Puesto: textoExcel(item.puesto, "Sin puesto"),
-          "Código de Posición": textoExcel(item.codigo_posicion),
-          "Posición": textoExcel(item.posicion),
-          "Posición Autorizador": textoExcel(item.posicion_autorizador),
-          "Jefe Directo": textoExcel(item.jefe_directo),
-          Oficina: textoExcel(item.oficina),
-          Reclutador: textoExcel(item.reclutador),
+          return {
+            // Identificación y acceso
+            "No. Empleado": textoExcel(item.no_empleado, "S/N"),
+            "Nombre Completo": construirNombreCompletoReporte(item),
+            "Correo Corporativo": textoExcel(
+              item.correo_corporativo || item.correo
+            ),
+            Empresa: textoExcel(item.empresa, "AIF").toUpperCase(),
+            Estatus: textoExcel(item.estatus, "Activo"),
+            "Rol del Sistema": textoExcel(item.rol_sistema, "Colaborador"),
+            AnyDesk: textoExcel(item.anydesk),
+            "Teléfono de Oficina": textoExcel(item.tel_oficina),
+            "Extensión": textoExcel(item.ext_oficina),
 
-          // Fechas y saldos
-          "Fecha de Ingreso": formatearFechaLegible(
-            item.fecha_ingreso ?? item.created_at
-          ),
-          "Fecha de Baja": item.fecha_baja
-            ? formatearFechaLegible(item.fecha_baja)
-            : "",
-          "Día de Cumpleaños": numeroExcel(item.dia_cumpleanos),
-          "Mes de Cumpleaños": textoExcel(item.mes_cumpleanos),
-          "Saldo de Vacaciones (Días)": Number(item.saldo_vacaciones ?? 0),
+            // Corporativo
+            Departamento: textoExcel(item.departamento, "General"),
+            Puesto: textoExcel(item.puesto, "Sin puesto"),
+            "Código de Posición": textoExcel(item.codigo_posicion),
+            "Posición": textoExcel(item.posicion),
+            "Posición Autorizador": textoExcel(item.posicion_autorizador),
+            "Jefe Directo": textoExcel(item.jefe_directo),
+            Oficina: textoExcel(item.oficina),
+            Reclutador: textoExcel(item.reclutador),
 
-          // Personales
-          Sexo: textoExcel(item.sexo),
-          RFC: textoExcel(item.rfc),
-          CURP: textoExcel(item.curp),
-          NSS: textoExcel(item.nss),
-          "ID 2": textoExcel(item.id2),
-          "Nivel Educativo": textoExcel(item.nivel_educativo),
-          "Teléfono Personal": textoExcel(item.telefono_personal),
-          "Correo Personal": textoExcel(item.correo_personal),
-          "Domicilio Completo": textoExcel(item.domicilio_completo),
+            // Fechas y saldos
+            "Fecha de Ingreso": formatearFechaLegible(
+              item.fecha_ingreso ?? item.created_at
+            ),
+            "Fecha de Baja": item.fecha_baja
+              ? formatearFechaLegible(item.fecha_baja)
+              : "",
+            "Motivo de Baja": textoExcel(item.motivo_baja),
+            "Día de Cumpleaños": numeroExcel(item.dia_cumpleanos),
+            "Mes de Cumpleaños": textoExcel(item.mes_cumpleanos),
+            "Saldo de Vacaciones (Días)": Number(item.saldo_vacaciones ?? 0),
 
-          // Financieros y compensación
-          Sueldo: numeroExcel(item.sueldo),
-          Bono: numeroExcel(item.bono),
-          "Total Compensación": numeroExcel(item.total_compensacion),
-          "Salario Diario": numeroExcel(item.salario_diario),
-          Banco: textoExcel(item.banco),
-          CLABE: textoExcel(item.clabe),
-          "Nómina": textoExcel(item.nomina),
-          "Días de Pago": textoExcel(item.dias_pago),
-          INFONAVIT: textoExcel(item.infonavit),
-          Aseguradora: textoExcel(item.aseguradora),
+            // Personales
+            Sexo: textoExcel(item.sexo),
+            RFC: textoExcel(item.rfc),
+            CURP: textoExcel(item.curp),
+            NSS: textoExcel(item.nss),
+            "ID 2": textoExcel(item.id2),
+            "Nivel Educativo": textoExcel(item.nivel_educativo),
+            "Teléfono Personal": textoExcel(item.telefono_personal),
+            "Correo Personal": textoExcel(item.correo_personal),
+            "Domicilio Completo": textoExcel(item.domicilio_completo),
 
-          // Emergencia y beneficiarios
-          "Contacto de Emergencia (Nombre)": textoExcel(
-            item.contacto_emergencia_nombre
-          ),
-          "Contacto de Emergencia (Número)": textoExcel(
-            item.contacto_emergencia_numero
-          ),
-          Beneficiario: textoExcel(item.beneficiario),
-          "Parentesco del Beneficiario": textoExcel(
-            item.parentesco_beneficiario
-          ),
+            // Financieros y compensación
+            Sueldo: numeroExcel(item.sueldo),
+            Bono: numeroExcel(item.bono),
+            "Total Compensación": numeroExcel(item.total_compensacion),
+            "Salario Diario": numeroExcel(item.salario_diario),
+            Banco: textoExcel(item.banco),
+            CLABE: textoExcel(item.clabe),
+            "Nómina": textoExcel(item.nomina),
+            "Días de Pago": textoExcel(item.dias_pago),
+            INFONAVIT: textoExcel(item.infonavit),
+            Aseguradora: textoExcel(item.aseguradora),
 
-          // Archivos
-          "Comprobante de Estudios (URL)": textoExcel(
-            item.comprobante_estudios_url
-          ),
-          "Carta de Recomendación (URL)": textoExcel(
-            item.carta_recomendacion_url
-          ),
-        }));
+            // Emergencia y beneficiarios
+            "Contacto de Emergencia (Nombre)": textoExcel(
+              item.contacto_emergencia_nombre
+            ),
+            "Contacto de Emergencia (Número)": textoExcel(
+              item.contacto_emergencia_numero
+            ),
+            Beneficiario: textoExcel(item.beneficiario),
+            "Parentesco del Beneficiario": textoExcel(
+              item.parentesco_beneficiario
+            ),
+
+            // Archivos (URL pública obtenida vía supabase.storage.from('expedientes').getPublicUrl)
+            "Comprobante de Estudios (URL)": urlComprobantePublica,
+            "Carta de Recomendación (URL)": urlCartaPublica,
+          };
+        });
       } else if (empleados.length > 0) {
         // Respaldo con datos en memoria si la consulta retorna vacía
-        const filtradosLocal = empleados.filter(
-          (e) => empresa === "Todas" || e.empresa === empresa
-        );
+        const filtradosLocal = empleados.filter((e) => {
+          if (empresa !== "Todas" && e.empresa !== empresa) return false;
+          if (
+            departamentoFiltro !== "Todos" &&
+            (e.departamento || "General").toLowerCase() !==
+              departamentoFiltro.toLowerCase()
+          ) {
+            return false;
+          }
+          if (colaboradorId && e.id !== colaboradorId) return false;
+          return true;
+        });
         filasExcel = filtradosLocal.map((e) => ({
           "No. Empleado": "S/N",
-          "Nombre del Empleado": e.nombre,
+          "Nombre Completo": e.nombre,
           "Correo Corporativo": e.correo,
           Empresa: e.empresa,
           Departamento: e.departamento,
@@ -303,10 +469,12 @@ export default function ReporteEmpleados({
       let query = supabase
         .from("asistencias")
         .select(
-          "*, colaboradores!colaborador_id(id, nombre_completo, correo_corporativo, empresa, puesto, departamento)"
-        )
-        .order("fecha", { ascending: false });
+          "*, colaboradores!colaborador_id(id, nombre, apellidos, nombre_completo, correo_corporativo, empresa, puesto, departamento)"
+        );
 
+      if (colaboradorId) {
+        query = query.eq("colaborador_id", colaboradorId);
+      }
       if (fechaInicio) {
         query = query.gte("fecha", fechaInicio);
       }
@@ -314,18 +482,30 @@ export default function ReporteEmpleados({
         query = query.lte("fecha", fechaFin);
       }
 
-      const { data, error } = await query;
+      const { data, error } = await query.order("fecha", { ascending: false });
 
       if (error) {
         throw new Error(error.message);
       }
 
       const registros = (data ?? []).filter((item) => {
-        if (empresa === "Todas") return true;
         const colab = extraerColaboradorJoin(
           (item as Record<string, unknown>).colaboradores
         );
-        return (colab.empresa ?? "AIF").toUpperCase() === empresa;
+        if (
+          empresa !== "Todas" &&
+          (colab.empresa ?? "AIF").toUpperCase() !== empresa
+        ) {
+          return false;
+        }
+        if (
+          departamentoFiltro !== "Todos" &&
+          (colab.departamento ?? "General").trim().toLowerCase() !==
+            departamentoFiltro.toLowerCase()
+        ) {
+          return false;
+        }
+        return true;
       });
 
       filasExcel = registros.map((item) => {
@@ -334,8 +514,7 @@ export default function ReporteEmpleados({
         );
         return {
           Fecha: formatearFechaLegible(item.fecha),
-          "Nombre del Empleado":
-            colab.nombre_completo || colab.nombre || "Colaborador",
+          "Nombre Completo": construirNombreCompletoReporte(colab),
           "Correo Corporativo":
             colab.correo_corporativo || colab.correo || "Sin correo",
           Empresa: (colab.empresa || "AIF").toUpperCase(),
@@ -350,64 +529,69 @@ export default function ReporteEmpleados({
         };
       });
     } else if (tipoReporte === "Vacaciones") {
-      // Incluye todas las vacaciones: tanto las solicitadas/aprobadas por Jefes Directos ("Vacaciones")
-      // como las otorgadas por Recursos Humanos ("Vacaciones pagadas" / "Vacaciones Pagadas")
-      let query = supabase
-        .from("solicitudes")
-        .select(
-          "*, colaboradores!colaborador_id(id, nombre_completo, correo_corporativo, empresa, puesto, departamento, saldo_vacaciones, jefe_directo)"
-        )
-        .in("tipo_solicitud", [
-          "Vacaciones",
-          "Vacaciones pagadas",
-          "Vacaciones Pagadas",
-        ])
-        .order("fecha_inicio", { ascending: false });
-
-      if (fechaInicio) {
-        query = query.gte("fecha_inicio", fechaInicio);
-      }
-      if (fechaFin) {
-        query = query.lte("fecha_inicio", fechaFin);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      const registros = (data ?? []).filter((item) => {
-        if (empresa === "Todas") return true;
-        const colab = extraerColaboradorJoin(
-          (item as Record<string, unknown>).colaboradores
-        );
-        return (colab.empresa ?? "AIF").toUpperCase() === empresa;
+      // Consulta en servidor con `createAdminClient` para incluir todas las solicitudes
+      // existentes de Colaboradores, Jefaturas y Recursos Humanos sin bloqueo de RLS
+      const resultado = await obtenerReporteVacacionesAction({
+        colaboradorId: colaboradorId || undefined,
+        fechaInicio: fechaInicio || undefined,
+        fechaFin: fechaFin || undefined,
       });
 
-      filasExcel = registros.map((item) => {
-        const colab = extraerColaboradorJoin(
-          (item as Record<string, unknown>).colaboradores
-        );
+      if (!resultado.ok) {
+        throw new Error(resultado.error);
+      }
+
+      const registros = resultado.registros.filter(({ colaborador }) => {
+        const colab = (colaborador ?? {}) as Record<string, unknown>;
+        if (
+          empresa !== "Todas" &&
+          String(colab.empresa ?? "AIF").toUpperCase() !== empresa
+        ) {
+          return false;
+        }
+        if (
+          departamentoFiltro !== "Todos" &&
+          String(colab.departamento ?? "General").trim().toLowerCase() !==
+            departamentoFiltro.toLowerCase()
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      filasExcel = registros.map(({ solicitud: item, colaborador }) => {
+        const colab = (colaborador ?? {}) as ColaboradorJoin & {
+          rol_sistema?: string | null;
+          es_jefatura?: boolean | null;
+        };
+        const rawItem = item as Record<string, unknown>;
         const diasCalculados =
-          typeof item.dias === "number" && item.dias > 0
-            ? item.dias
+          typeof rawItem.dias === "number" && rawItem.dias > 0
+            ? rawItem.dias
             : calcularDiasEntreFechas(item.fecha_inicio, item.fecha_fin);
 
-        const tipoTexto = item.tipo_solicitud || item.tipo || "Vacaciones";
+        const tipoTexto = String(
+          item.tipo_solicitud || rawItem.tipo || "Vacaciones"
+        );
         const esOtorgadaPorRH = tipoTexto
           .trim()
           .toLowerCase()
           .includes("pagadas");
 
+        const rolBase = textoExcel(colab.rol_sistema, "Colaborador");
+        const rolMostrar =
+          rolBase === "Colaborador" && colab.es_jefatura
+            ? "Jefatura"
+            : rolBase;
+
         return {
-          "Nombre del Empleado":
-            colab.nombre_completo || colab.nombre || "Colaborador",
+          "Nombre Completo": construirNombreCompletoReporte(colab),
           "Correo Corporativo":
             colab.correo_corporativo || colab.correo || "Sin correo",
           Empresa: (colab.empresa || "AIF").toUpperCase(),
           Departamento: colab.departamento || "General",
           Puesto: colab.puesto || "Sin puesto",
+          "Rol del Sistema": rolMostrar,
           "Tipo de Vacaciones": tipoTexto,
           "Otorgada / Autorizada por": esOtorgadaPorRH
             ? "Recursos Humanos (RH)"
@@ -457,7 +641,9 @@ export default function ReporteEmpleados({
           mensaje: `No se encontraron registros de ${tipoReporte.toLowerCase()} para los filtros seleccionados (${
             empresa === "Todas" ? "Todas las empresas" : empresa
           }${
-            requiereRangoFechas ? `, del ${fechaInicio} al ${fechaFin}` : ""
+            requiereRangoFechas && (fechaInicio || fechaFin)
+              ? `, del ${fechaInicio || "inicio"} al ${fechaFin || "actualidad"}`
+              : ""
           }).`,
         });
         return;
@@ -517,7 +703,9 @@ export default function ReporteEmpleados({
           mensaje: `No se encontraron registros de ${tipoReporte.toLowerCase()} para los filtros seleccionados (${
             empresa === "Todas" ? "Todas las empresas" : empresa
           }${
-            requiereRangoFechas ? `, del ${fechaInicio} al ${fechaFin}` : ""
+            requiereRangoFechas && (fechaInicio || fechaFin)
+              ? `, del ${fechaInicio || "inicio"} al ${fechaFin || "actualidad"}`
+              : ""
           }).`,
         });
         return;
@@ -582,7 +770,7 @@ export default function ReporteEmpleados({
         </span>
       </div>
 
-      <div className="grid grid-cols-1 items-end gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 items-end gap-4 md:grid-cols-2 lg:grid-cols-3">
         {/* 1. Selector Tipo de Reporte */}
         <div>
           <label htmlFor="reporte-tipo" className={LABEL}>
@@ -592,7 +780,16 @@ export default function ReporteEmpleados({
             id="reporte-tipo"
             value={tipoReporte}
             onChange={(e) => {
-              setTipoReporte(e.target.value as TipoReporteRH);
+              const nuevoTipo = e.target.value as TipoReporteRH;
+              setTipoReporte(nuevoTipo);
+              if (nuevoTipo === "Vacaciones") {
+                setFechaInicio("");
+                setFechaFin("");
+              } else if (nuevoTipo === "Asistencia" && !fechaInicio && !fechaFin) {
+                const rango = obtenerRangoMesActual();
+                setFechaInicio(rango.inicio);
+                setFechaFin(rango.fin);
+              }
               setFeedbackReporte(null);
               setDatosPreview(null);
             }}
@@ -601,7 +798,7 @@ export default function ReporteEmpleados({
             <option value="Empleados">Empleados (Directorio / Nómina)</option>
             <option value="Asistencia">Asistencia (Entradas y Salidas)</option>
             <option value="Vacaciones">
-              Vacaciones (Jefes Directos y RH)
+              Vacaciones (Colaboradores, Jefaturas y RH)
             </option>
           </select>
         </div>
@@ -627,7 +824,150 @@ export default function ReporteEmpleados({
           </select>
         </div>
 
-        {/* 3. Fecha Inicio */}
+        {/* 3. Selector Área / Departamento */}
+        <div>
+          <label htmlFor="reporte-departamento" className={LABEL}>
+            ÁREA / DEPARTAMENTO
+          </label>
+          <select
+            id="reporte-departamento"
+            value={departamentoFiltro}
+            onChange={(e) => {
+              setDepartamentoFiltro(e.target.value);
+              setFeedbackReporte(null);
+              setDatosPreview(null);
+            }}
+            className={CONTROL}
+          >
+            <option value="Todos">Todas las áreas / departamentos</option>
+            {departamentosDisponibles.map((dep) => (
+              <option key={dep} value={dep}>
+                {dep}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* 4. Combobox con búsqueda: Colaborador Específico */}
+        <div ref={comboboxRef} className="relative">
+          <label htmlFor="reporte-colaborador-combobox" className={LABEL}>
+            COLABORADOR ESPECÍFICO
+          </label>
+          <div className="flex items-center gap-1.5">
+            <input
+              id="reporte-colaborador-combobox"
+              type="text"
+              role="combobox"
+              aria-expanded={comboboxAbierto}
+              aria-controls="lista-colaboradores-reporte"
+              aria-autocomplete="list"
+              value={
+                comboboxAbierto
+                  ? busquedaColaborador
+                  : colaboradorSeleccionadoObj
+                  ? colaboradorSeleccionadoObj.nombreCompleto
+                  : busquedaColaborador
+              }
+              onFocus={() => {
+                setComboboxAbierto(true);
+              }}
+              onChange={(e) => {
+                setBusquedaColaborador(e.target.value);
+                if (colaboradorId) {
+                  setColaboradorId("");
+                }
+                setComboboxAbierto(true);
+                setFeedbackReporte(null);
+                setDatosPreview(null);
+              }}
+              placeholder="Todos los colaboradores (Buscar por nombre...)"
+              className={CONTROL}
+            />
+            {(colaboradorId || busquedaColaborador) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setColaboradorId("");
+                  setBusquedaColaborador("");
+                  setComboboxAbierto(false);
+                  setFeedbackReporte(null);
+                  setDatosPreview(null);
+                }}
+                title="Limpiar filtro de colaborador"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm border border-gray-200 bg-brand-beige/40 text-xs font-bold text-gray-600 transition-colors hover:bg-brand-beige"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          {comboboxAbierto && (
+            <ul
+              id="lista-colaboradores-reporte"
+              role="listbox"
+              className="absolute left-0 right-0 z-30 mt-1 max-h-56 overflow-y-auto rounded-sm border border-gray-200 bg-brand-surface py-1 shadow-xl"
+            >
+              <li role="option" aria-selected={colaboradorId === ""}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setColaboradorId("");
+                    setBusquedaColaborador("");
+                    setComboboxAbierto(false);
+                    setFeedbackReporte(null);
+                    setDatosPreview(null);
+                  }}
+                  className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs transition-colors hover:bg-brand-beige/50 ${
+                    colaboradorId === ""
+                      ? "bg-brand-beige/40 font-bold text-brand-dark"
+                      : "text-gray-700"
+                  }`}
+                >
+                  <span>Todos los colaboradores</span>
+                  <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400">
+                    TODOS
+                  </span>
+                </button>
+              </li>
+
+              {colaboradoresFiltradosCombobox.length === 0 ? (
+                <li className="px-3 py-2.5 text-xs text-gray-400">
+                  No se encontraron colaboradores con ese nombre.
+                </li>
+              ) : (
+                colaboradoresFiltradosCombobox.map((c) => {
+                  const seleccionado = colaboradorId === c.id;
+                  return (
+                    <li key={c.id} role="option" aria-selected={seleccionado}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setColaboradorId(c.id);
+                          setBusquedaColaborador("");
+                          setComboboxAbierto(false);
+                          setFeedbackReporte(null);
+                          setDatosPreview(null);
+                        }}
+                        className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-brand-beige/50 ${
+                          seleccionado
+                            ? "bg-brand-beige/60 font-bold text-brand-dark"
+                            : "text-gray-800"
+                        }`}
+                      >
+                        <span className="truncate">{c.nombreCompleto}</span>
+                        <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest text-gray-400">
+                          {c.departamento} · {c.empresa}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })
+              )}
+            </ul>
+          )}
+        </div>
+
+        {/* 5. Fecha Inicio */}
         <div>
           <label htmlFor="reporte-fecha-inicio" className={LABEL}>
             FECHA INICIO{" "}
@@ -649,7 +989,7 @@ export default function ReporteEmpleados({
           />
         </div>
 
-        {/* 4. Fecha Fin */}
+        {/* 6. Fecha Fin */}
         <div>
           <label htmlFor="reporte-fecha-fin" className={LABEL}>
             FECHA FIN{" "}
@@ -737,40 +1077,109 @@ export default function ReporteEmpleados({
                     <th
                       key={col}
                       scope="col"
-                      className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500"
+                      className="whitespace-nowrap px-3.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-gray-500"
                     >
                       {col}
                     </th>
                   ))}
+                  <th
+                    scope="col"
+                    className="whitespace-nowrap px-3.5 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-gray-500"
+                  >
+                    Expediente Digital
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {filasVisibles.map((fila, idx) => (
-                  <tr
-                    key={idx}
-                    className="border-t border-gray-100 transition-colors hover:bg-gray-50"
-                  >
-                    {columnasPreview.map((col) => {
-                      const valor = fila[col];
-                      const texto =
-                        valor === undefined || valor === null || valor === ""
-                          ? "—"
-                          : String(valor);
-                      return (
-                        <td
-                          key={col}
-                          className="whitespace-nowrap px-4 py-2.5 text-sm text-gray-800"
+                {filasVisibles.map((fila, idx) => {
+                  const nombreFila = String(
+                    fila["Nombre Completo"] ?? ""
+                  ).trim();
+                  const colabInfo =
+                    mapaColaboradorPorNombre.get(nombreFila.toLowerCase()) ??
+                    null;
+                  const urlCompFila = String(
+                    fila["Comprobante de Estudios (URL)"] ??
+                      colabInfo?.comprobanteEstudiosUrl ??
+                      ""
+                  ).trim();
+                  const urlCartaFila = String(
+                    fila["Carta de Recomendación (URL)"] ??
+                      colabInfo?.cartaRecomendacionUrl ??
+                      ""
+                  ).trim();
+                  const tieneAlgunDocumento = Boolean(
+                    urlCompFila || urlCartaFila
+                  );
+
+                  return (
+                    <tr
+                      key={idx}
+                      className="border-t border-gray-100 transition-colors hover:bg-gray-50"
+                    >
+                      {columnasPreview.map((col) => {
+                        const valor = fila[col];
+                        const texto =
+                          valor === undefined || valor === null || valor === ""
+                            ? "—"
+                            : String(valor);
+                        return (
+                          <td
+                            key={col}
+                            className="whitespace-nowrap px-3.5 py-2 text-xs text-gray-800"
+                          >
+                            {texto}
+                          </td>
+                        );
+                      })}
+                      <td className="whitespace-nowrap px-3.5 py-2 text-right">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setVisorColaboradorActivo({
+                              id: colabInfo?.id ?? `row-${idx}`,
+                              nombreCompleto: nombreFila || "Colaborador",
+                              departamento: String(
+                                fila.Departamento ??
+                                  colabInfo?.departamento ??
+                                  "General"
+                              ),
+                              empresa: String(
+                                fila.Empresa ?? colabInfo?.empresa ?? "AIF"
+                              ),
+                              comprobanteEstudiosUrl: urlCompFila || null,
+                              cartaRecomendacionUrl: urlCartaFila || null,
+                            })
+                          }
+                          className={`rounded-sm border px-2.5 py-1 text-[9px] font-bold uppercase tracking-widest transition-colors ${
+                            tieneAlgunDocumento
+                              ? "border-brand-dark bg-brand-surface text-brand-dark hover:bg-brand-dark hover:text-brand-gold"
+                              : "border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100"
+                          }`}
                         >
-                          {texto}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                          {tieneAlgunDocumento
+                            ? "Ver Documento"
+                            : "Ver Expediente (Vacío)"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
+      )}
+
+      {visorColaboradorActivo && (
+        <VisorDocumentoExpedienteModal
+          nombreColaborador={visorColaboradorActivo.nombreCompleto}
+          comprobanteEstudiosUrl={
+            visorColaboradorActivo.comprobanteEstudiosUrl
+          }
+          cartaRecomendacionUrl={visorColaboradorActivo.cartaRecomendacionUrl}
+          onCerrar={() => setVisorColaboradorActivo(null)}
+        />
       )}
     </section>
   );

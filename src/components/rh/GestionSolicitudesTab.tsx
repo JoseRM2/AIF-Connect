@@ -64,16 +64,25 @@ const ESTATUS_BADGE: Record<
 
 const FORM_INICIAL: VacacionesPagadasForm = {
   colaborador_id: "",
-  tipo_solicitud: "Vacaciones pagadas",
+  tipo_solicitud: "Vacaciones Pagadas",
   fecha_inicio: "",
   fecha_fin: "",
-  dias_a_pagar: 1,
+  dias_a_pagar: 5,
 };
 
+const LIMITE_ANUAL_VACACIONES_PAGADAS = 10;
+const MINIMO_DIAS_VACACIONES_PAGADAS = 5;
+
+function obtenerAnioFecha(fecha: string | null | undefined): string {
+  const limpia = (fecha ?? "").trim();
+  if (/^\d{4}/.test(limpia)) return limpia.slice(0, 4);
+  return String(new Date().getFullYear());
+}
+
 const LABEL =
-  "mb-1.5 block text-[9px] font-bold uppercase tracking-widest text-gray-400";
+  "mb-1 block text-[8px] font-bold uppercase tracking-wider text-gray-800";
 const FIELD =
-  "h-10 w-full rounded-sm border border-gray-200 bg-brand-beige/40 px-3 text-xs text-gray-800 focus:border-brand-dark focus:outline-none";
+  "h-9 w-full rounded-sm border border-gray-300 bg-brand-surface px-3 text-xs font-medium text-gray-900 focus:border-brand-dark focus:outline-none";
 
 function normalizarEstatus(raw: string | null | undefined): EstatusSolicitud {
   const valor = (raw ?? "").trim();
@@ -168,7 +177,7 @@ export default function GestionSolicitudesTab() {
             .select(
               "*, colaboradores!colaborador_id(nombre_completo, saldo_vacaciones)"
             )
-            .in("tipo_solicitud", ["Vacaciones pagadas", "Incapacidad"])
+            .in("tipo_solicitud", ["Vacaciones Pagadas", "Incapacidad"])
             .order("created_at", { ascending: false }),
           supabase
             .from("colaboradores")
@@ -243,9 +252,45 @@ export default function GestionSolicitudesTab() {
 
     try {
       const supabase = createClient();
-      const esVacaciones =
-        solicitud.tipo_solicitud.trim().toLowerCase() === "vacaciones";
+      const tipoLower = solicitud.tipo_solicitud.trim().toLowerCase();
+      const esVacaciones = tipoLower === "vacaciones";
+      const esVacacionesPagadas = tipoLower === "vacaciones pagadas";
       let nuevoSaldoAplicado: number | null = null;
+
+      if (newStatus === "Completado" && esVacacionesPagadas) {
+        const diasSolicitados = calcularDiasSolicitados(
+          solicitud.fecha_inicio,
+          solicitud.fecha_fin
+        );
+        if (diasSolicitados < MINIMO_DIAS_VACACIONES_PAGADAS) {
+          setErrorMsg(
+            `No se puede aprobar: las Vacaciones Pagadas requieren un mínimo de ${MINIMO_DIAS_VACACIONES_PAGADAS} días por solicitud (${diasSolicitados} día(s) solicitados).`
+          );
+          return;
+        }
+        const anioSol = obtenerAnioFecha(solicitud.fecha_inicio);
+        const diasAprobadosAnio = solicitudes.reduce((acum, item) => {
+          if (
+            item.id !== id &&
+            item.colaborador_id === solicitud.colaborador_id &&
+            item.tipo_solicitud.trim().toLowerCase() === "vacaciones pagadas" &&
+            item.estatus === "Completado" &&
+            obtenerAnioFecha(item.fecha_inicio) === anioSol
+          ) {
+            return (
+              acum + calcularDiasSolicitados(item.fecha_inicio, item.fecha_fin)
+            );
+          }
+          return acum;
+        }, 0);
+
+        if (diasAprobadosAnio + diasSolicitados > LIMITE_ANUAL_VACACIONES_PAGADAS) {
+          setErrorMsg(
+            `No se puede aprobar: el colaborador ya tiene ${diasAprobadosAnio} día(s) de Vacaciones Pagadas aprobados en ${anioSol} y el límite anual es de ${LIMITE_ANUAL_VACACIONES_PAGADAS} días.`
+          );
+          return;
+        }
+      }
 
       // Si se aprueba ('Completado') y es de tipo 'Vacaciones', descontar días del saldo_vacaciones
       if (newStatus === "Completado" && esVacaciones) {
@@ -254,6 +299,13 @@ export default function GestionSolicitudesTab() {
           solicitud.fecha_fin
         );
         const saldoActual = obtenerSaldoColaborador(solicitud.colaboradores);
+
+        if (diasSolicitados > saldoActual) {
+          const msgInsuficiente = `No se puede aprobar la solicitud: el colaborador solicita ${diasSolicitados} día(s) de vacaciones, pero solo cuenta con ${saldoActual} día(s) disponibles.`;
+          setErrorMsg(msgInsuficiente);
+          return;
+        }
+
         const nuevoSaldo = saldoActual - diasSolicitados;
 
         const { error: errorSaldo } = await supabase
@@ -348,7 +400,55 @@ export default function GestionSolicitudesTab() {
 
     const dias = Math.max(1, Number(form.dias_a_pagar) || 1);
     const tipoElegido: TipoAsignacionDirectaRh =
-      form.tipo_solicitud || "Vacaciones pagadas";
+      form.tipo_solicitud || "Vacaciones Pagadas";
+
+    if (tipoElegido === "Vacaciones Pagadas") {
+      const diasPorRango = calcularDiasSolicitados(
+        form.fecha_inicio,
+        form.fecha_fin || form.fecha_inicio
+      );
+      const diasEfectivos = Math.max(dias, diasPorRango);
+
+      if (
+        dias < MINIMO_DIAS_VACACIONES_PAGADAS ||
+        (diasPorRango > 0 && diasPorRango < MINIMO_DIAS_VACACIONES_PAGADAS)
+      ) {
+        setErrorMsg(
+          `Las Vacaciones Pagadas requieren un mínimo de ${MINIMO_DIAS_VACACIONES_PAGADAS} días por solicitud.`
+        );
+        return;
+      }
+
+      if (diasEfectivos > LIMITE_ANUAL_VACACIONES_PAGADAS) {
+        setErrorMsg(
+          `Las Vacaciones Pagadas tienen un límite máximo de ${LIMITE_ANUAL_VACACIONES_PAGADAS} días por año.`
+        );
+        return;
+      }
+
+      const anioSol = obtenerAnioFecha(form.fecha_inicio);
+      const diasAnioColaborador = solicitudes.reduce((acum, item) => {
+        if (
+          item.colaborador_id === colaborador.id &&
+          item.tipo_solicitud.trim().toLowerCase() === "vacaciones pagadas" &&
+          item.estatus !== "Rechazado" &&
+          obtenerAnioFecha(item.fecha_inicio) === anioSol
+        ) {
+          return (
+            acum + calcularDiasSolicitados(item.fecha_inicio, item.fecha_fin)
+          );
+        }
+        return acum;
+      }, 0);
+
+      if (diasAnioColaborador + diasEfectivos > LIMITE_ANUAL_VACACIONES_PAGADAS) {
+        setErrorMsg(
+          `Límite anual de Vacaciones Pagadas excedido para ${colaborador.nombre_completo}: ya cuenta con ${diasAnioColaborador} día(s) en ${anioSol} (máximo ${LIMITE_ANUAL_VACACIONES_PAGADAS} días por año).`
+        );
+        return;
+      }
+    }
+
     const motivoTexto =
       tipoElegido === "Incapacidad"
         ? `Asignación directa de incapacidad (${dias} ${
@@ -544,7 +644,8 @@ export default function GestionSolicitudesTab() {
                   return (
                     <tr
                       key={solicitud.id}
-                      className="hover:bg-gray-50/50"
+                      id={`solicitud-${solicitud.id}`}
+                      className="hover:bg-gray-50/50 target:bg-brand-beige/40"
                     >
                       <td className="px-6 py-4">
                         <p className="text-xs font-bold text-gray-900">
@@ -675,7 +776,7 @@ export default function GestionSolicitudesTab() {
               required
               className={FIELD}
             >
-              <option value="Vacaciones pagadas">Vacaciones pagadas</option>
+              <option value="Vacaciones Pagadas">Vacaciones Pagadas</option>
               <option value="Incapacidad">Incapacidad</option>
             </select>
           </div>
@@ -719,13 +820,21 @@ export default function GestionSolicitudesTab() {
             <label htmlFor="rh-vac-dias" className={LABEL}>
               {form.tipo_solicitud === "Incapacidad"
                 ? "DÍAS DE INCAPACIDAD"
-                : "DÍAS A PAGAR"}
+                : "DÍAS A PAGAR (MÍN. 5, MÁX. 10 ANUAL)"}
             </label>
             <input
               id="rh-vac-dias"
               type="number"
-              min={1}
-              max={30}
+              min={
+                form.tipo_solicitud === "Incapacidad"
+                  ? 1
+                  : MINIMO_DIAS_VACACIONES_PAGADAS
+              }
+              max={
+                form.tipo_solicitud === "Incapacidad"
+                  ? 30
+                  : LIMITE_ANUAL_VACACIONES_PAGADAS
+              }
               value={form.dias_a_pagar}
               onChange={(e) =>
                 setForm((prev) => ({

@@ -321,12 +321,27 @@ export async function resolverSolicitudEquipoAction(
             ? Math.round((finMs - inicioMs) / 86_400_000) + 1
             : 1;
         const saldoActual = Number(colaborador.saldo_vacaciones ?? 0);
-        const nuevoSaldo = Math.max(0, saldoActual - diasSolicitados);
 
-        await supabaseAdmin
+        if (diasSolicitados > saldoActual) {
+          return {
+            ok: false,
+            error: `No se puede aprobar la solicitud: el colaborador solicita ${diasSolicitados} día(s) de vacaciones, pero solo cuenta con ${saldoActual} día(s) disponibles.`,
+          };
+        }
+
+        const nuevoSaldo = saldoActual - diasSolicitados;
+
+        const { error: updateSaldoError } = await supabaseAdmin
           .from("colaboradores")
           .update({ saldo_vacaciones: nuevoSaldo })
           .eq("id", solicitud.colaborador_id);
+
+        if (updateSaldoError) {
+          return {
+            ok: false,
+            error: `Error al descontar el saldo de vacaciones: ${updateSaldoError.message}`,
+          };
+        }
       }
     }
 

@@ -2,6 +2,94 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  html {
+    font-size: 16px;
+    color: #111827;
+  }
+
+  body {
+    line-height: 1.5;
+    text-align: start;
+    color: #111827;
+  }
+
+  /* Bordes de controles de formulario con contraste >= 3:1 sobre fondos claros */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    border-color: #94a3b8;
+    color: #111827;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: #4b5563 !important;
+    opacity: 1;
+  }
+
+  th {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+    overflow-wrap: break-word;
+  }
+}
+
+/* Escalado minimalista calibrado (+1px) en unidades rem y line-height sin unidades */
+.text-\[7px\],
+.text-\[8px\] {
+  font-size: 0.5625rem !important; /* 9px (+1px) */
+  line-height: 1.35 !important;
+}
+
+.text-\[9px\],
+.text-\[10px\] {
+  font-size: 0.625rem !important; /* 10px (+1px) */
+  line-height: 1.4 !important;
+}
+
+.text-\[11px\] {
+  font-size: 0.6875rem !important; /* 11px (+1px) */
+  line-height: 1.45 !important;
+}
+
+/* Refuerzo de contraste de texto (>= 4.5:1) sobre superficies claras */
+.text-gray-400 {
+  color: #4b5563 !important;
+}
+
+.text-gray-500 {
+  color: #374151 !important;
+}
+
+.text-gray-600 {
+  color: #1f2937 !important;
+}
+
+/* En superficies oscuras (Sidebar, encabezados oscuros), mantener texto claro de alto contraste */
+.bg-brand-dark .text-gray-400,
+.bg-brand-dark.text-gray-300 {
+  color: #d1d5db !important;
+}
+
+.bg-brand-dark .text-gray-300 {
+  color: #f3f4f6 !important;
+}
+
+/* Oro corporativo oscurecido sobre fondos claros para cumplir contraste de lectura,
+   conservando el tono champagne brillante cuando el fondo es oscuro (bg-brand-dark) */
+.text-brand-gold:not(.bg-brand-dark) {
+  color: #785d32;
+}
+
+.bg-brand-dark .text-brand-gold,
+.bg-brand-dark.text-brand-gold {
+  color: #cbb389 !important;
+}
+
 /* Diálogos modales: evitar que el scroll se propague a la página de fondo. */
 dialog:modal {
   overscroll-behavior: contain;

@@ -10,6 +10,7 @@ export interface PerfilSesionActual {
   email: string;
   nombreCompleto: string;
   empresa: string;
+  departamento: string;
   rolSistema: RolSistema;
   esJefatura: boolean;
   esRecursosHumanos: boolean;
@@ -17,10 +18,10 @@ export interface PerfilSesionActual {
 
 export function normalizarRolSistema(raw: string | null | undefined): RolSistema {
   const limpio = (raw ?? "").trim();
-  if (limpio === "Recursos Humanos") {
+  if (limpio === "Recursos Humanos" || limpio === "RH") {
     return "Recursos Humanos";
   }
-  if (limpio === "Jefatura") {
+  if (limpio === "Jefatura" || limpio === "Jefe") {
     return "Jefatura";
   }
   return "Colaborador";
@@ -42,13 +43,22 @@ export const obtenerSesionYRol = cache(
       return null;
     }
 
-    const { data: colaborador } = await supabase
+    // Usamos select("*") para evitar errores PostgREST si alguna columna opcional (como `area`) no existe en la BD
+    let { data: colaborador } = await supabase
       .from("colaboradores")
-      .select(
-        "id, nombre_completo, correo_corporativo, empresa, rol_sistema, es_jefatura"
-      )
+      .select("*")
       .eq("id", user.id)
       .maybeSingle();
+
+    // Fallback por correo corporativo en caso de que el registro aún no coincida por UUID
+    if (!colaborador && user.email) {
+      const { data: colabPorCorreo } = await supabase
+        .from("colaboradores")
+        .select("*")
+        .ilike("correo_corporativo", user.email.trim())
+        .maybeSingle();
+      colaborador = colabPorCorreo ?? null;
+    }
 
     const rolSistema = normalizarRolSistema(colaborador?.rol_sistema);
     const esJefatura =
@@ -61,7 +71,11 @@ export const obtenerSesionYRol = cache(
         colaborador?.nombre_completo?.trim() ||
         user.email?.split("@")[0] ||
         "Colaborador",
-      empresa: colaborador?.empresa || "AIF",
+      empresa: colaborador?.empresa?.trim() || "AIF",
+      departamento:
+        colaborador?.departamento?.trim() ||
+        colaborador?.area?.trim() ||
+        "Todos",
       rolSistema,
       esJefatura,
       esRecursosHumanos: rolSistema === ROL_RECURSOS_HUMANOS,

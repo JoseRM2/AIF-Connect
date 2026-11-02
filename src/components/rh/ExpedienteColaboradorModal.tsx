@@ -7,11 +7,13 @@ import {
   type CrearColaboradorPayload,
 } from "@/app/actions/colaboradores";
 import { createClient } from "@/lib/supabase/client";
+import VisorDocumentoExpedienteModal from "@/components/rh/VisorDocumentoExpedienteModal";
 import {
   ACCEPT_EXPEDIENTES,
   TAMANO_MAXIMO_MB,
   subirDocumentosExpediente,
   validarArchivoExpediente,
+  type TipoDocumentoExpediente,
 } from "@/lib/storage/expedientes";
 import type { Database } from "@/types/supabase";
 
@@ -56,11 +58,11 @@ const MESES = [
 ] as const;
 
 const SECTION_TITLE =
-  "mb-3.5 border-l-2 border-brand-gold pl-2.5 text-[9px] font-bold uppercase tracking-widest text-gray-500";
+  "mb-2.5 border-l-4 border-brand-gold pl-2.5 text-[9px] font-extrabold uppercase tracking-wider text-gray-900";
 const FIELD =
-  "h-10 w-full rounded-sm border border-gray-200 bg-brand-surface px-3 text-xs text-gray-800 placeholder-gray-400 transition-colors focus:border-brand-dark focus:outline-none";
+  "h-9 w-full rounded-sm border border-gray-300 bg-brand-surface px-3 text-xs font-medium text-gray-900 placeholder-gray-600 transition-colors focus:border-brand-dark focus:outline-none";
 const MICRO_LABEL =
-  "mb-1 block text-[8px] font-bold uppercase tracking-widest text-gray-400";
+  "mb-1 block text-[8px] font-bold uppercase tracking-wider text-gray-800";
 
 function textoONull(valor: string): string | null {
   const limpio = valor.trim();
@@ -84,6 +86,91 @@ function enteroONull(etiqueta: string, valor: string): number | null {
     throw new Error(`El campo "${etiqueta}" debe ser un número entero.`);
   }
   return n;
+}
+
+function separarNombreCompletoInicial(
+  colaborador?: ColaboradorRow | null
+): { nombreInicial: string; apellidosInicial: string } {
+  if (!colaborador) {
+    return { nombreInicial: "", apellidosInicial: "" };
+  }
+  const nombreDirecto = (colaborador.nombre ?? "").trim();
+  const apellidosDirecto = (colaborador.apellidos ?? "").trim();
+  if (nombreDirecto || apellidosDirecto) {
+    return {
+      nombreInicial: nombreDirecto,
+      apellidosInicial: apellidosDirecto,
+    };
+  }
+  const completo = (colaborador.nombre_completo ?? "").trim();
+  if (!completo) {
+    return { nombreInicial: "", apellidosInicial: "" };
+  }
+  const partes = completo.split(/\s+/);
+  if (partes.length === 1) {
+    return { nombreInicial: partes[0], apellidosInicial: "" };
+  }
+  if (partes.length === 2) {
+    return { nombreInicial: partes[0], apellidosInicial: partes[1] };
+  }
+  // Si tiene 3 o más palabras, las últimas 2 suelen ser apellidos en México
+  return {
+    nombreInicial: partes.slice(0, -2).join(" "),
+    apellidosInicial: partes.slice(-2).join(" "),
+  };
+}
+
+function formatearErrorUnicidadColaborador(err: unknown): string | null {
+  if (!err) return null;
+  const obj =
+    typeof err === "object" && err !== null
+      ? (err as { code?: string; message?: string; details?: string })
+      : {};
+  const codigo = String(obj.code ?? "").trim();
+  const mensajeRaw =
+    err instanceof Error
+      ? err.message
+      : `${obj.message ?? ""} ${obj.details ?? ""}`.trim();
+
+  // Si ya viene formateado desde el Server Action como "Error: El ... ingresado ya pertenece a otro colaborador"
+  if (/^Error:\s+El\s+/i.test(mensajeRaw)) {
+    return mensajeRaw;
+  }
+
+  const textoLower = `${codigo} ${mensajeRaw} ${obj.details ?? ""}`.toLowerCase();
+  const esUnicidad =
+    codigo === "23505" ||
+    textoLower.includes("23505") ||
+    textoLower.includes("duplicate key") ||
+    textoLower.includes("unique constraint") ||
+    textoLower.includes("already exists") ||
+    textoLower.includes("pertenece a otro colaborador");
+
+  if (!esUnicidad) return null;
+
+  if (textoLower.includes("curp")) {
+    return "Error: El CURP ingresado ya pertenece a otro colaborador";
+  }
+  if (textoLower.includes("rfc")) {
+    return "Error: El RFC ingresado ya pertenece a otro colaborador";
+  }
+  if (textoLower.includes("nss")) {
+    return "Error: El NSS ingresado ya pertenece a otro colaborador";
+  }
+  if (textoLower.includes("id2")) {
+    return "Error: El ID2 ingresado ya pertenece a otro colaborador";
+  }
+  if (textoLower.includes("correo") || textoLower.includes("email")) {
+    return "Error: El correo electrónico ingresado ya pertenece a otro colaborador";
+  }
+  if (
+    textoLower.includes("no_empleado") ||
+    textoLower.includes("numero_empleado")
+  ) {
+    return "Error: El No. de Empleado ingresado ya pertenece a otro colaborador";
+  }
+
+  return "Error: Uno de los datos únicos ingresados (RFC, CURP, NSS o ID2) ya pertenece a otro colaborador";
 }
 
 function calcularAntiguedadTexto(fechaIngreso: string): string {
@@ -114,6 +201,7 @@ interface CampoArchivoProps {
   disabled: boolean;
   inputKey: number;
   onChange: (e: ChangeEvent<HTMLInputElement>) => void;
+  onVerDocumento?: () => void;
 }
 
 function CampoArchivo({
@@ -125,23 +213,33 @@ function CampoArchivo({
   disabled,
   inputKey,
   onChange,
+  onVerDocumento,
 }: CampoArchivoProps) {
+  const tieneDocumento = Boolean((urlActual ?? "").trim());
+
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
         <label htmlFor={id} className={`${MICRO_LABEL} mb-0`}>
           {label}
         </label>
-        {urlActual && (
-          <a
-            href={urlActual}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[9px] font-bold uppercase tracking-widest text-brand-dark underline transition-opacity hover:opacity-70"
-          >
-            Ver documento actual
-          </a>
-        )}
+        <button
+          type="button"
+          disabled={!tieneDocumento}
+          onClick={onVerDocumento}
+          title={
+            tieneDocumento
+              ? "Abrir visor de documento"
+              : "No hay ningún documento adjunto en el expediente"
+          }
+          className={`text-[9px] font-bold uppercase tracking-widest transition-opacity ${
+            tieneDocumento
+              ? "text-brand-dark underline hover:opacity-70"
+              : "cursor-not-allowed text-gray-300"
+          }`}
+        >
+          Ver Documento
+        </button>
       </div>
       <input
         key={inputKey}
@@ -151,13 +249,13 @@ function CampoArchivo({
         disabled={disabled}
         onChange={onChange}
         aria-invalid={Boolean(error)}
-        className="flex h-10 w-full items-center rounded-sm border border-gray-200 bg-brand-surface px-3 py-1.5 text-xs text-gray-700 file:mr-3 file:rounded-sm file:border-0 file:bg-brand-beige/60 file:px-2.5 file:py-1 file:text-[10px] file:font-bold file:uppercase file:text-gray-800 hover:file:bg-brand-beige disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex h-10 w-full items-center rounded-sm border border-gray-200 bg-brand-surface px-3 py-1.5 text-xs text-gray-700 file:mr-3 file:rounded-sm file:border-0 file:bg-brand-beige/60 file:px-2.5 file:py-1 file:text-[10px] file-font-bold file:uppercase file:text-gray-800 hover:file:bg-brand-beige disabled:cursor-not-allowed disabled:opacity-60"
       />
       {archivo && !error && (
         <p className="mt-1 text-[10px] text-gray-500">
           Seleccionado: {archivo.name} ({(archivo.size / 1024 / 1024).toFixed(2)}{" "}
           MB)
-          {urlActual ? " — reemplazará al documento actual." : ""}
+          {tieneDocumento ? " — reemplazará al documento actual." : ""}
         </p>
       )}
       {error && (
@@ -171,7 +269,9 @@ function CampoArchivo({
       )}
       {!archivo && !error && (
         <p className="mt-1 text-[10px] text-gray-400">
-          PDF, JPG o PNG. Máx. {TAMANO_MAXIMO_MB} MB.
+          {tieneDocumento
+            ? `Documento cargado en expediente. PDF, JPG o PNG (Máx. ${TAMANO_MAXIMO_MB} MB).`
+            : "No hay ningún documento adjunto en el expediente."}
         </p>
       )}
     </div>
@@ -187,12 +287,13 @@ export default function ExpedienteColaboradorModal({
   const rawEditar = (colaboradorEditar ?? {}) as Record<string, unknown>;
 
   // 1. Identificación y Acceso
+  const { nombreInicial, apellidosInicial } =
+    separarNombreCompletoInicial(colaboradorEditar);
   const [noEmpleado, setNoEmpleado] = useState<string>(
     String(rawEditar.numero_empleado ?? rawEditar.no_empleado ?? "")
   );
-  const [nombreCompleto, setNombreCompleto] = useState<string>(
-    colaboradorEditar?.nombre_completo ?? colaboradorEditar?.nombre ?? ""
-  );
+  const [nombre, setNombre] = useState<string>(nombreInicial);
+  const [apellidos, setApellidos] = useState<string>(apellidosInicial);
   const [estatus, setEstatus] = useState<"Activo" | "Inactivo">(
     (colaboradorEditar?.estatus ?? "Activo")
       .toString()
@@ -282,6 +383,9 @@ export default function ExpedienteColaboradorModal({
   const [fechaBaja, setFechaBaja] = useState<string>(
     String(rawEditar.fecha_baja ?? "")
   );
+  const [motivoBaja, setMotivoBaja] = useState<string>(
+    String(rawEditar.motivo_baja ?? "")
+  );
   const [diaCumple, setDiaCumple] = useState<string>(
     String(rawEditar.dia_cumpleanos ?? "")
   );
@@ -357,6 +461,8 @@ export default function ExpedienteColaboradorModal({
   }>({});
   const [inputKeys, setInputKeys] = useState({ comprobante: 0, carta: 0 });
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [visorDocumentoTipo, setVisorDocumentoTipo] =
+    useState<TipoDocumentoExpediente | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -464,13 +570,19 @@ export default function ExpedienteColaboradorModal({
     e.preventDefault();
     if (isSubmitting) return;
 
-    const nombreLimpio = nombreCompleto.trim();
+    const nombrePilaLimpio = nombre.trim();
+    const apellidosLimpio = apellidos.trim();
+    const nombreLimpio = `${nombrePilaLimpio} ${apellidosLimpio}`.trim();
     const correoLimpio = correoCorporativo.trim();
     const puestoLimpio = puesto.trim();
     const deptoLimpio = departamento.trim() || "General";
 
-    if (!nombreLimpio) {
-      setErrorMsg("El nombre completo del colaborador es obligatorio.");
+    if (!nombrePilaLimpio) {
+      setErrorMsg("El campo Nombre(s) del colaborador es obligatorio.");
+      return;
+    }
+    if (!apellidosLimpio) {
+      setErrorMsg("El campo Apellidos del colaborador es obligatorio.");
       return;
     }
     if (!correoLimpio) {
@@ -501,6 +613,8 @@ export default function ExpedienteColaboradorModal({
       // Strings vacíos -> null; campos financieros/numéricos -> number.
       const payloadMapeado: ColaboradorUpdate = {
         // Núcleo de la tabla
+        nombre: nombrePilaLimpio,
+        apellidos: apellidosLimpio,
         nombre_completo: nombreLimpio,
         correo_corporativo: correoLimpio,
         empresa, // "AIF" | "ROYAL"
@@ -531,6 +645,7 @@ export default function ExpedienteColaboradorModal({
         // Fechas
         fecha_ingreso: textoONull(fechaIngreso),
         fecha_baja: textoONull(fechaBaja),
+        motivo_baja: textoONull(motivoBaja),
         dia_cumpleanos: enteroONull("Día de cumpleaños", diaCumple),
         mes_cumpleanos: textoONull(mesCumple),
 
@@ -596,7 +711,7 @@ export default function ExpedienteColaboradorModal({
           .maybeSingle();
 
         if (error) {
-          throw new Error(error.message);
+          throw error;
         }
 
         const actualizado: ColaboradorRow = (data as ColaboradorRow | null) ?? {
@@ -609,6 +724,8 @@ export default function ExpedienteColaboradorModal({
         // Modo Nuevo Ingreso: cuenta de Auth + expediente vía Server Action (service role)
         const payloadInsert: CrearColaboradorPayload = {
           ...(payloadMapeado as CrearColaboradorPayload),
+          nombre: nombrePilaLimpio,
+          apellidos: apellidosLimpio,
           nombre_completo: nombreLimpio,
           // Las URLs se guardan tras la subida, cuando ya existe el id del colaborador
           comprobante_estudios_url: null,
@@ -679,11 +796,24 @@ export default function ExpedienteColaboradorModal({
         });
       }
     } catch (err) {
-      setErrorMsg(
-        err instanceof Error
-          ? `No se pudo guardar el expediente: ${err.message}`
-          : "Ocurrió un error al guardar el expediente en Supabase."
-      );
+      const errorUnicidad = formatearErrorUnicidadColaborador(err);
+      if (errorUnicidad) {
+        setErrorMsg(errorUnicidad);
+      } else {
+        const msgRaw =
+          err instanceof Error
+            ? err.message
+            : typeof err === "object" && err !== null && "message" in err
+              ? String((err as { message: unknown }).message)
+              : "";
+        setErrorMsg(
+          msgRaw
+            ? msgRaw.startsWith("Error:")
+              ? msgRaw
+              : `No se pudo guardar el expediente: ${msgRaw}`
+            : "Ocurrió un error al guardar el expediente en Supabase."
+        );
+      }
     } finally {
       setIsUploading(false);
       setIsSubmitting(false);
@@ -830,19 +960,46 @@ export default function ExpedienteColaboradorModal({
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-7 px-8 py-7">
           {errorMsg && (
-            <div
-              role="alert"
-              aria-live="polite"
-              className="rounded-sm border border-status-danger/30 bg-status-danger/10 px-4 py-3 text-xs font-semibold text-status-danger-dark"
-            >
-              {errorMsg}
-            </div>
+            <>
+              {/* Toast rojo flotante de alta visibilidad para errores de unicidad / validación */}
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="fixed right-6 top-6 z-[60] flex max-w-md items-start justify-between gap-3 rounded-sm border-l-4 border-status-danger bg-brand-surface px-5 py-4 text-xs font-bold text-status-danger-dark shadow-2xl ring-1 ring-status-danger/20"
+              >
+                <span>{errorMsg}</span>
+                <button
+                  type="button"
+                  onClick={() => setErrorMsg(null)}
+                  aria-label="Cerrar alerta de error"
+                  className="ml-2 text-xs font-black text-gray-400 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Alerta roja embebida en la parte superior del formulario */}
+              <div
+                role="alert"
+                aria-live="polite"
+                className="flex items-center justify-between gap-3 rounded-sm border border-status-danger/40 bg-status-danger/10 px-4 py-3 text-xs font-bold text-status-danger-dark"
+              >
+                <span>{errorMsg}</span>
+                <button
+                  type="button"
+                  onClick={() => setErrorMsg(null)}
+                  className="text-[10px] font-bold uppercase tracking-widest text-status-danger-dark underline hover:opacity-80"
+                >
+                  CERRAR
+                </button>
+              </div>
+            </>
           )}
 
           {/* 1. IDENTIFICACIÓN Y ACCESO */}
           <section>
             <h3 className={SECTION_TITLE}>IDENTIFICACIÓN Y ACCESO</h3>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
                 <label htmlFor={`no-emp-${uid}`} className="sr-only">
                   No. Empleado
@@ -861,14 +1018,29 @@ export default function ExpedienteColaboradorModal({
 
               <div>
                 <label htmlFor={`nombre-${uid}`} className="sr-only">
-                  Nombre Personal (Obligatorio)
+                  Nombre(s) (Obligatorio)
                 </label>
                 <input
                   id={`nombre-${uid}`}
                   type="text"
-                  value={nombreCompleto}
-                  onChange={(e) => setNombreCompleto(e.target.value)}
-                  placeholder="Nombre Personal *"
+                  value={nombre}
+                  onChange={(e) => setNombre(e.target.value)}
+                  placeholder="Nombre(s) *"
+                  required
+                  className={FIELD}
+                />
+              </div>
+
+              <div>
+                <label htmlFor={`apellidos-${uid}`} className="sr-only">
+                  Apellidos (Obligatorio)
+                </label>
+                <input
+                  id={`apellidos-${uid}`}
+                  type="text"
+                  value={apellidos}
+                  onChange={(e) => setApellidos(e.target.value)}
+                  placeholder="Apellidos *"
                   required
                   className={FIELD}
                 />
@@ -962,7 +1134,7 @@ export default function ExpedienteColaboradorModal({
           {/* 2. DATOS CORPORATIVOS */}
           <section>
             <h3 className={SECTION_TITLE}>DATOS CORPORATIVOS</h3>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
                 <label htmlFor={`empresa-${uid}`} className="sr-only">
                   Empresa Corporativa
@@ -1173,7 +1345,7 @@ export default function ExpedienteColaboradorModal({
           {/* 3. FECHAS Y SALDOS */}
           <section>
             <h3 className={SECTION_TITLE}>FECHAS Y SALDOS</h3>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
                 <label htmlFor={`fecha-ingreso-${uid}`} className={MICRO_LABEL}>
                   FECHA DE INGRESO
@@ -1267,13 +1439,29 @@ export default function ExpedienteColaboradorModal({
                   className={FIELD}
                 />
               </div>
+
+              {(estatus === "Inactivo" || motivoBaja.trim() !== "") && (
+                <div className="md:col-span-3">
+                  <label htmlFor={`motivo-baja-${uid}`} className={MICRO_LABEL}>
+                    MOTIVO DE LA BAJA
+                  </label>
+                  <input
+                    id={`motivo-baja-${uid}`}
+                    type="text"
+                    value={motivoBaja}
+                    onChange={(e) => setMotivoBaja(e.target.value)}
+                    placeholder="Motivo de la baja del colaborador"
+                    className={FIELD}
+                  />
+                </div>
+              )}
             </div>
           </section>
 
           {/* 4. DATOS PERSONALES */}
           <section>
             <h3 className={SECTION_TITLE}>DATOS PERSONALES</h3>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
                 <label htmlFor={`sexo-${uid}`} className="sr-only">
                   Sexo
@@ -1422,7 +1610,7 @@ export default function ExpedienteColaboradorModal({
           {/* 5. DATOS FINANCIEROS Y COMPENSACIÓN */}
           <section>
             <h3 className={SECTION_TITLE}>DATOS FINANCIEROS Y COMPENSACIÓN</h3>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
                 <label htmlFor={`sueldo-${uid}`} className="sr-only">
                   Sueldo
@@ -1574,7 +1762,7 @@ export default function ExpedienteColaboradorModal({
           {/* 6. CONTACTOS DE EMERGENCIA */}
           <section>
             <h3 className={SECTION_TITLE}>CONTACTOS DE EMERGENCIA</h3>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
                 <label htmlFor={`em-nombre-${uid}`} className="sr-only">
                   Nombre de Contacto de Emergencia
@@ -1635,7 +1823,18 @@ export default function ExpedienteColaboradorModal({
 
           {/* 7. ARCHIVOS */}
           <section>
-            <h3 className={SECTION_TITLE}>ARCHIVOS</h3>
+            <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2">
+              <h3 className={`${SECTION_TITLE} mb-0`}>ARCHIVOS</h3>
+              {colaboradorEditar && (
+                <button
+                  type="button"
+                  onClick={() => setVisorDocumentoTipo("comprobante_estudios")}
+                  className="rounded-sm border border-brand-dark bg-brand-surface px-3 py-1 text-[9px] font-bold uppercase tracking-widest text-brand-dark transition-colors hover:bg-brand-dark hover:text-brand-gold"
+                >
+                  ABRIR VISOR DE EXPEDIENTE
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <CampoArchivo
                 id={`file-estudios-${uid}`}
@@ -1646,6 +1845,9 @@ export default function ExpedienteColaboradorModal({
                 disabled={isSubmitting}
                 inputKey={inputKeys.comprobante}
                 onChange={handleSeleccionArchivo("comprobante")}
+                onVerDocumento={() =>
+                  setVisorDocumentoTipo("comprobante_estudios")
+                }
               />
               <CampoArchivo
                 id={`file-carta-${uid}`}
@@ -1656,6 +1858,9 @@ export default function ExpedienteColaboradorModal({
                 disabled={isSubmitting}
                 inputKey={inputKeys.carta}
                 onChange={handleSeleccionArchivo("carta")}
+                onVerDocumento={() =>
+                  setVisorDocumentoTipo("carta_recomendacion")
+                }
               />
             </div>
           </section>
@@ -1684,6 +1889,20 @@ export default function ExpedienteColaboradorModal({
           </footer>
         </form>
       </div>
+
+      {visorDocumentoTipo && (
+        <VisorDocumentoExpedienteModal
+          nombreColaborador={
+            `${nombre} ${apellidos}`.trim() ||
+            colaboradorEditar?.nombre_completo ||
+            "Colaborador"
+          }
+          comprobanteEstudiosUrl={colaboradorEditar?.comprobante_estudios_url}
+          cartaRecomendacionUrl={colaboradorEditar?.carta_recomendacion_url}
+          documentoInicial={visorDocumentoTipo}
+          onCerrar={() => setVisorDocumentoTipo(null)}
+        />
+      )}
     </div>
   );
 }

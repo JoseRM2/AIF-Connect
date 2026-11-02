@@ -34,6 +34,8 @@ export interface PublicacionMuro {
   requiere_acuse: boolean;
   created_at?: string | null;
   fecha_publicacion?: string | null;
+  empresa_destino?: string | null;
+  departamento_destino?: string | null;
   categoria?: string | null;
   archivo_url?: string | null;
   imagen_url?: string | null;
