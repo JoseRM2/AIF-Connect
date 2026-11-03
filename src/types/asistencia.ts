@@ -59,16 +59,24 @@ export interface Asistencia {
   /** "YYYY-MM-DD". */
   fecha: string;
   hora_entrada: string | null;
+  hora_inicio_descanso?: string | null;
+  hora_fin_descanso?: string | null;
   hora_salida: string | null;
   estatus: EstatusAsistencia;
   ubicacion_entrada: UbicacionMarcaje | null;
+  ubicacion_inicio_descanso?: UbicacionMarcaje | null;
+  ubicacion_fin_descanso?: UbicacionMarcaje | null;
   ubicacion_salida: UbicacionMarcaje | null;
 }
 
 export interface HorarioLaboral {
   /** "HH:mm". */
   entrada: string;
+  /** "HH:mm" (por defecto "18:00"). */
+  salida?: string;
   tolerancia_min: number;
+  /** Límite máximo de descanso en minutos (por defecto 60). */
+  limite_descanso_min?: number;
 }
 
 export interface MetricasAsistencia {

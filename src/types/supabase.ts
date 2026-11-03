@@ -198,8 +198,12 @@ export interface Database {
           colaborador_id: string;
           fecha: string;
           hora_entrada: string | null;
+          hora_inicio_descanso?: string | null;
+          hora_fin_descanso?: string | null;
           hora_salida: string | null;
           ubicacion_entrada: Json | null;
+          ubicacion_inicio_descanso?: Json | null;
+          ubicacion_fin_descanso?: Json | null;
           ubicacion_salida: Json | null;
           estatus: string;
           ticket_id?: string | null;
@@ -210,8 +214,12 @@ export interface Database {
           colaborador_id: string;
           fecha: string;
           hora_entrada?: string | null;
+          hora_inicio_descanso?: string | null;
+          hora_fin_descanso?: string | null;
           hora_salida?: string | null;
           ubicacion_entrada?: Json | null;
+          ubicacion_inicio_descanso?: Json | null;
+          ubicacion_fin_descanso?: Json | null;
           ubicacion_salida?: Json | null;
           estatus?: string;
           ticket_id?: string | null;
@@ -222,8 +230,12 @@ export interface Database {
           colaborador_id?: string;
           fecha?: string;
           hora_entrada?: string | null;
+          hora_inicio_descanso?: string | null;
+          hora_fin_descanso?: string | null;
           hora_salida?: string | null;
           ubicacion_entrada?: Json | null;
+          ubicacion_inicio_descanso?: Json | null;
+          ubicacion_fin_descanso?: Json | null;
           ubicacion_salida?: Json | null;
           estatus?: string;
           ticket_id?: string | null;

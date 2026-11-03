@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { obtenerReporteVacacionesAction } from "@/app/actions/reportes";
 import VisorDocumentoExpedienteModal from "@/components/rh/VisorDocumentoExpedienteModal";
-import { DownloadIcon } from "@/components/ui/icons";
+import { AlertTriangleIcon, DownloadIcon } from "@/components/ui/icons";
+import { evaluarIndicadoresVisualesAsistencia } from "@/lib/asistencia";
 import { obtenerUrlPublicaExpediente } from "@/lib/storage/expedientes";
 import { createClient } from "@/lib/supabase/client";
 import type { Empleado } from "@/types/rh";
@@ -512,6 +513,45 @@ export default function ReporteEmpleados({
         const colab = extraerColaboradorJoin(
           (item as Record<string, unknown>).colaboradores
         );
+        const indicadores = evaluarIndicadoresVisualesAsistencia({
+          hora_entrada: item.hora_entrada,
+          hora_inicio_descanso: item.hora_inicio_descanso,
+          hora_fin_descanso: item.hora_fin_descanso,
+          hora_salida: item.hora_salida,
+          estatus: item.estatus,
+        });
+
+        const duracionDescansoTexto =
+          indicadores.minutosDescanso !== null
+            ? indicadores.descansoExcedido
+              ? `${indicadores.minutosDescanso} min [⚠ DESCANSO EXCEDIDO]`
+              : `${indicadores.minutosDescanso} min`
+            : item.hora_inicio_descanso && !item.hora_fin_descanso
+            ? "En curso"
+            : "Sin descanso";
+
+        const banderasVisuales: string[] = [];
+        if (indicadores.esRetardo) {
+          banderasVisuales.push(
+            indicadores.minutosRetardo > 0
+              ? `⚠ Retardo (+${indicadores.minutosRetardo} min)`
+              : "⚠ Retardo"
+          );
+        }
+        if (indicadores.descansoExcedido) {
+          banderasVisuales.push(
+            `⚠ Descanso Excedido (${indicadores.minutosDescanso} min > 60 min)`
+          );
+        }
+        if (indicadores.esSalidaTardia) {
+          banderasVisuales.push(
+            `★ Tiempo Adicional (+${indicadores.minutosAdicionales} min)`
+          );
+        }
+
+        const horaEntradaBase = formatearHoraLegible(item.hora_entrada);
+        const horaSalidaBase = formatearHoraLegible(item.hora_salida);
+
         return {
           Fecha: formatearFechaLegible(item.fecha),
           "Nombre Completo": construirNombreCompletoReporte(colab),
@@ -520,12 +560,39 @@ export default function ReporteEmpleados({
           Empresa: (colab.empresa || "AIF").toUpperCase(),
           Departamento: colab.departamento || "General",
           Puesto: colab.puesto || "Sin puesto",
-          "Hora de Entrada": formatearHoraLegible(item.hora_entrada),
-          "Hora de Salida": formatearHoraLegible(item.hora_salida),
-          "Estatus de Asistencia": item.estatus || "Puntual",
+          "Hora de Entrada":
+            indicadores.esRetardo && item.hora_entrada
+              ? `${horaEntradaBase} [⚠ Retardo]`
+              : horaEntradaBase,
+          "Inicio Descanso": item.hora_inicio_descanso
+            ? formatearHoraLegible(item.hora_inicio_descanso)
+            : "Sin registro",
+          "Fin Descanso": item.hora_fin_descanso
+            ? formatearHoraLegible(item.hora_fin_descanso)
+            : item.hora_inicio_descanso
+            ? "En curso"
+            : "Sin registro",
+          "Duración Descanso": duracionDescansoTexto,
+          "Hora de Salida":
+            indicadores.esSalidaTardia && item.hora_salida
+              ? `${horaSalidaBase} [★ Tiempo Adicional]`
+              : horaSalidaBase,
+          "Estatus de Asistencia":
+            item.estatus || (indicadores.esRetardo ? "Retardo" : "A Tiempo"),
+          "Indicadores de Horario":
+            banderasVisuales.length > 0
+              ? banderasVisuales.join(" | ")
+              : "Horario Regular",
           "Ubicación de Entrada": formatearUbicacionJson(
             item.ubicacion_entrada
           ),
+          "Ubicación Inicio Descanso": formatearUbicacionJson(
+            item.ubicacion_inicio_descanso
+          ),
+          "Ubicación Fin Descanso": formatearUbicacionJson(
+            item.ubicacion_fin_descanso
+          ),
+          "Ubicación de Salida": formatearUbicacionJson(item.ubicacion_salida),
         };
       });
     } else if (tipoReporte === "Vacaciones") {
@@ -721,8 +788,65 @@ export default function ReporteEmpleados({
           const val = String(row[key] ?? "");
           return Math.max(acc, val.length);
         }, key.length);
-        return { wch: Math.min(Math.max(maxLen + 4, 14), 42) };
+        return { wch: Math.min(Math.max(maxLen + 4, 14), 48) };
       });
+
+      // Banderas visuales en Excel para Reporte de Asistencia (Misión 3: solo visual, sin deducciones/bonos)
+      if (tipoReporte === "Asistencia") {
+        filasExcel.forEach((fila, rowIdx) => {
+          const excelRow = rowIdx + 1; // +1 por fila de encabezados (0-indexed en encode_cell)
+          const duracionDesc = String(fila["Duración Descanso"] ?? "");
+          const indicadoresTexto = String(fila["Indicadores de Horario"] ?? "");
+          const tieneDescansoExcedido =
+            duracionDesc.includes("DESCANSO EXCEDIDO") ||
+            indicadoresTexto.includes("Descanso Excedido");
+          const tieneRetardo = indicadoresTexto.includes("Retardo");
+          const tieneTiempoAdicional =
+            indicadoresTexto.includes("Tiempo Adicional");
+
+          encabezados.forEach((colKey, colIdx) => {
+            const cellRef = XLSX.utils.encode_cell({ r: excelRow, c: colIdx });
+            const cell = worksheet[cellRef] as
+              | (XLSX.CellObject & { s?: Record<string, unknown> })
+              | undefined;
+            if (!cell) return;
+
+            if (
+              tieneDescansoExcedido &&
+              (colKey === "Duración Descanso" ||
+                colKey === "Indicadores de Horario")
+            ) {
+              cell.s = {
+                fill: { patternType: "solid", fgColor: { rgb: "FEE2E2" } },
+                font: { bold: true, color: { rgb: "991B1B" } },
+              };
+            } else if (tieneDescansoExcedido) {
+              cell.s = {
+                fill: { patternType: "solid", fgColor: { rgb: "FEF2F2" } },
+              };
+            } else if (
+              tieneRetardo &&
+              (colKey === "Hora de Entrada" ||
+                colKey === "Estatus de Asistencia" ||
+                colKey === "Indicadores de Horario")
+            ) {
+              cell.s = {
+                fill: { patternType: "solid", fgColor: { rgb: "FEF3C7" } },
+                font: { bold: true, color: { rgb: "92400E" } },
+              };
+            } else if (
+              tieneTiempoAdicional &&
+              (colKey === "Hora de Salida" ||
+                colKey === "Indicadores de Horario")
+            ) {
+              cell.s = {
+                fill: { patternType: "solid", fgColor: { rgb: "FDF8EE" } },
+                font: { bold: true, color: { rgb: "854D0E" } },
+              };
+            }
+          });
+        });
+      }
 
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, tipoReporte);
@@ -1112,10 +1236,31 @@ export default function ReporteEmpleados({
                     urlCompFila || urlCartaFila
                   );
 
+                  const esReporteAsistencia = tipoPreview === "Asistencia";
+                  const duracionDescFila = String(
+                    fila["Duración Descanso"] ?? ""
+                  );
+                  const indicadoresFila = String(
+                    fila["Indicadores de Horario"] ?? ""
+                  );
+                  const filaDescansoExcedido =
+                    esReporteAsistencia &&
+                    (duracionDescFila.includes("DESCANSO EXCEDIDO") ||
+                      indicadoresFila.includes("Descanso Excedido"));
+                  const filaRetardo =
+                    esReporteAsistencia && indicadoresFila.includes("Retardo");
+                  const filaTiempoAdicional =
+                    esReporteAsistencia &&
+                    indicadoresFila.includes("Tiempo Adicional");
+
                   return (
                     <tr
                       key={idx}
-                      className="border-t border-gray-100 transition-colors hover:bg-gray-50"
+                      className={`border-t border-gray-100 transition-colors ${
+                        filaDescansoExcedido
+                          ? "bg-status-danger/5 hover:bg-status-danger/10"
+                          : "hover:bg-gray-50"
+                      }`}
                     >
                       {columnasPreview.map((col) => {
                         const valor = fila[col];
@@ -1123,6 +1268,100 @@ export default function ReporteEmpleados({
                           valor === undefined || valor === null || valor === ""
                             ? "—"
                             : String(valor);
+
+                        if (
+                          esReporteAsistencia &&
+                          col === "Duración Descanso" &&
+                          filaDescansoExcedido
+                        ) {
+                          return (
+                            <td
+                              key={col}
+                              className="whitespace-nowrap bg-status-danger/10 px-3.5 py-2 text-xs font-bold text-status-danger-dark"
+                            >
+                              <span className="inline-flex items-center gap-1 rounded border border-status-danger/40 bg-white/80 px-2 py-0.5 text-[10px] font-bold uppercase text-status-danger-dark">
+                                <AlertTriangleIcon className="h-3 w-3" />
+                                {texto}
+                              </span>
+                            </td>
+                          );
+                        }
+
+                        if (
+                          esReporteAsistencia &&
+                          col === "Hora de Entrada" &&
+                          filaRetardo
+                        ) {
+                          return (
+                            <td
+                              key={col}
+                              className="whitespace-nowrap px-3.5 py-2 text-xs"
+                            >
+                              <span className="inline-flex items-center gap-1 rounded border border-status-warning/50 bg-status-warning/10 px-2 py-0.5 text-[10px] font-bold text-status-warning-dark">
+                                <AlertTriangleIcon className="h-3 w-3" />
+                                {texto}
+                              </span>
+                            </td>
+                          );
+                        }
+
+                        if (
+                          esReporteAsistencia &&
+                          col === "Hora de Salida" &&
+                          filaTiempoAdicional
+                        ) {
+                          return (
+                            <td
+                              key={col}
+                              className="whitespace-nowrap px-3.5 py-2 text-xs"
+                            >
+                              <span className="inline-flex items-center gap-1 rounded border border-brand-gold/60 bg-brand-beige/70 px-2 py-0.5 text-[10px] font-bold text-brand-dark">
+                                {texto}
+                              </span>
+                            </td>
+                          );
+                        }
+
+                        if (
+                          esReporteAsistencia &&
+                          col === "Indicadores de Horario"
+                        ) {
+                          return (
+                            <td
+                              key={col}
+                              className="whitespace-nowrap px-3.5 py-2 text-xs"
+                            >
+                              { !filaDescansoExcedido &&
+                              !filaRetardo &&
+                              !filaTiempoAdicional ? (
+                                <span className="rounded border border-status-success/40 bg-status-success/10 px-2 py-0.5 text-[9px] font-bold uppercase text-status-success-dark">
+                                  HORARIO REGULAR
+                                </span>
+                              ) : (
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {filaRetardo && (
+                                    <span className="inline-flex items-center gap-1 rounded border border-status-warning/50 bg-status-warning/10 px-2 py-0.5 text-[9px] font-bold uppercase text-status-warning-dark">
+                                      <AlertTriangleIcon className="h-3 w-3" />
+                                      RETARDO
+                                    </span>
+                                  )}
+                                  {filaDescansoExcedido && (
+                                    <span className="inline-flex items-center gap-1 rounded border border-status-danger/50 bg-status-danger/10 px-2 py-0.5 text-[9px] font-bold uppercase text-status-danger-dark">
+                                      <AlertTriangleIcon className="h-3 w-3" />
+                                      DESCANSO EXCEDIDO
+                                    </span>
+                                  )}
+                                  {filaTiempoAdicional && (
+                                    <span className="inline-flex items-center gap-1 rounded border border-brand-gold/60 bg-brand-beige/70 px-2 py-0.5 text-[9px] font-bold uppercase text-brand-dark">
+                                      TIEMPO ADICIONAL
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                          );
+                        }
+
                         return (
                           <td
                             key={col}

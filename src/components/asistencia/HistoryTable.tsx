@@ -1,5 +1,8 @@
-import { CheckCircleIcon } from "@/components/ui/icons";
-import { formatHora12 } from "@/lib/asistencia";
+import { AlertTriangleIcon, CheckCircleIcon } from "@/components/ui/icons";
+import {
+  evaluarIndicadoresVisualesAsistencia,
+  formatHora12,
+} from "@/lib/asistencia";
 import type { Asistencia, EstatusAsistencia } from "@/types/asistencia";
 
 interface HistoryTableProps {
@@ -9,8 +12,9 @@ interface HistoryTableProps {
 const COLUMNAS = [
   "FECHA",
   "ENTRADA",
+  "DESCANSO",
   "SALIDA",
-  "ESTATUS",
+  "ESTATUS / INDICADORES",
   "GEOLOCALIZACIÓN",
   "ACCIÓN",
 ] as const;
@@ -109,10 +113,22 @@ export default function HistoryTable({ registros }: HistoryTableProps) {
               registros.map((registro) => {
                 const estatusUi =
                   ESTATUS_ESTILOS[registro.estatus] ?? ESTATUS_ESTILOS.a_tiempo;
+                const indicadores = evaluarIndicadoresVisualesAsistencia({
+                  hora_entrada: registro.hora_entrada,
+                  hora_inicio_descanso: registro.hora_inicio_descanso,
+                  hora_fin_descanso: registro.hora_fin_descanso,
+                  hora_salida: registro.hora_salida,
+                  estatus: registro.estatus,
+                });
+
                 return (
                   <tr
                     key={registro.id}
-                    className="border-b border-gray-100 hover:bg-gray-50/50"
+                    className={`border-b border-gray-100 transition-colors ${
+                      indicadores.descansoExcedido
+                        ? "bg-status-danger/5 hover:bg-status-danger/10"
+                        : "hover:bg-gray-50/50"
+                    }`}
                   >
                     <td className="py-4 pr-4 font-mono text-xs font-bold text-gray-900">
                       {registro.fecha}
@@ -123,14 +139,57 @@ export default function HistoryTable({ registros }: HistoryTableProps) {
                         : "-"}
                     </td>
                     <td className="py-4 pr-4 text-xs text-gray-600">
+                      {registro.hora_inicio_descanso ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span>
+                            {formatHora12(
+                              registro.hora_inicio_descanso.slice(0, 5)
+                            )}
+                            {" - "}
+                            {registro.hora_fin_descanso
+                              ? formatHora12(
+                                  registro.hora_fin_descanso.slice(0, 5)
+                                )
+                              : "En curso"}
+                          </span>
+                          {indicadores.minutosDescanso !== null && (
+                            <span
+                              className={`text-[10px] font-bold ${
+                                indicadores.descansoExcedido
+                                  ? "text-status-danger-dark"
+                                  : "text-gray-400"
+                              }`}
+                            >
+                              {indicadores.minutosDescanso} min
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td className="py-4 pr-4 text-xs text-gray-600">
                       {registro.hora_salida
                         ? formatHora12(registro.hora_salida.slice(0, 5))
                         : "-"}
                     </td>
                     <td className="py-4 pr-4 text-xs">
-                      <span className={`${CHIP} ${estatusUi.className}`}>
-                        {estatusUi.label}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className={`${CHIP} ${estatusUi.className}`}>
+                          {estatusUi.label}
+                        </span>
+                        {indicadores.descansoExcedido && (
+                          <span className="inline-flex items-center gap-1 rounded border border-status-danger/50 bg-status-danger/10 px-2 py-0.5 text-[9px] font-bold uppercase text-status-danger-dark">
+                            <AlertTriangleIcon className="h-3 w-3" />
+                            DESCANSO EXCEDIDO
+                          </span>
+                        )}
+                        {indicadores.esSalidaTardia && (
+                          <span className="inline-flex items-center gap-1 rounded border border-brand-gold/60 bg-brand-beige/70 px-2 py-0.5 text-[9px] font-bold uppercase text-brand-dark">
+                            TIEMPO ADICIONAL (+{indicadores.minutosAdicionales}M)
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-4 pr-4 text-xs">
                       <GeoCell registro={registro} />

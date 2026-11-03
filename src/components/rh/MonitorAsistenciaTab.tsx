@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { formatHora12 } from "@/lib/asistencia";
+import { AlertTriangleIcon } from "@/components/ui/icons";
+import {
+  evaluarIndicadoresVisualesAsistencia,
+  formatHora12,
+} from "@/lib/asistencia";
 import { createClient } from "@/lib/supabase/client";
 import type { Json } from "@/types/supabase";
 
@@ -15,8 +19,12 @@ interface AsistenciaConColaborador {
   colaborador_id: string;
   fecha: string;
   hora_entrada: string | null;
+  hora_inicio_descanso?: string | null;
+  hora_fin_descanso?: string | null;
   hora_salida: string | null;
   ubicacion_entrada: Json | null;
+  ubicacion_inicio_descanso?: Json | null;
+  ubicacion_fin_descanso?: Json | null;
   ubicacion_salida: Json | null;
   estatus: string;
   ticket_id?: string | null;
@@ -67,8 +75,9 @@ const COLUMNAS_ASISTENCIAS = [
   { label: "EMPLEADO", className: "text-left" },
   { label: "FECHA", className: "text-left" },
   { label: "HORA DE ENTRADA", className: "text-left" },
+  { label: "DESCANSO", className: "text-left" },
   { label: "HORA DE SALIDA", className: "text-left" },
-  { label: "ESTATUS", className: "text-right" },
+  { label: "ESTATUS / INDICADORES", className: "text-right" },
 ] as const;
 
 const COLUMNAS_TICKETS = [
@@ -248,8 +257,12 @@ export default function MonitorAsistenciaTab() {
             colaborador_id: item.colaborador_id,
             fecha: item.fecha,
             hora_entrada: item.hora_entrada,
+            hora_inicio_descanso: item.hora_inicio_descanso ?? null,
+            hora_fin_descanso: item.hora_fin_descanso ?? null,
             hora_salida: item.hora_salida,
             ubicacion_entrada: item.ubicacion_entrada,
+            ubicacion_inicio_descanso: item.ubicacion_inicio_descanso ?? null,
+            ubicacion_fin_descanso: item.ubicacion_fin_descanso ?? null,
             ubicacion_salida: item.ubicacion_salida,
             estatus: item.estatus,
             ticket_id: item.ticket_id ?? null,
@@ -934,9 +947,23 @@ export default function MonitorAsistenciaTab() {
                     asistencia.colaboradores
                   );
                   const chip = obtenerChipEstatus(asistencia.estatus);
+                  const indicadores = evaluarIndicadoresVisualesAsistencia({
+                    hora_entrada: asistencia.hora_entrada,
+                    hora_inicio_descanso: asistencia.hora_inicio_descanso,
+                    hora_fin_descanso: asistencia.hora_fin_descanso,
+                    hora_salida: asistencia.hora_salida,
+                    estatus: asistencia.estatus,
+                  });
 
                   return (
-                    <tr key={asistencia.id} className="hover:bg-gray-50/50">
+                    <tr
+                      key={asistencia.id}
+                      className={`transition-colors ${
+                        indicadores.descansoExcedido
+                          ? "bg-status-danger/5 hover:bg-status-danger/10"
+                          : "hover:bg-gray-50/50"
+                      }`}
+                    >
                       <td className="px-6 py-4">
                         <p className="text-xs font-bold text-gray-900">
                           {nombreEmpleado}
@@ -946,17 +973,74 @@ export default function MonitorAsistenciaTab() {
                         {asistencia.fecha}
                       </td>
                       <td className="px-6 py-4 font-mono text-xs text-gray-600">
-                        {formatearHora(asistencia.hora_entrada)}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span>{formatearHora(asistencia.hora_entrada)}</span>
+                          {indicadores.esRetardo && (
+                            <span className="inline-flex items-center gap-0.5 rounded-sm border border-status-warning/40 bg-status-warning/10 px-1.5 py-0.5 font-sans text-[8px] font-bold uppercase tracking-wider text-status-warning-dark">
+                              <AlertTriangleIcon className="h-2.5 w-2.5" />
+                              RETARDO
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 font-mono text-xs text-gray-600">
-                        {formatearHora(asistencia.hora_salida)}
+                        {asistencia.hora_inicio_descanso ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span>
+                              {formatearHora(asistencia.hora_inicio_descanso)}
+                              {" - "}
+                              {asistencia.hora_fin_descanso
+                                ? formatearHora(asistencia.hora_fin_descanso)
+                                : "En curso"}
+                            </span>
+                            {indicadores.minutosDescanso !== null && (
+                              <span
+                                className={`font-sans text-[9px] font-bold ${
+                                  indicadores.descansoExcedido
+                                    ? "text-status-danger-dark"
+                                    : "text-gray-400"
+                                }`}
+                              >
+                                {indicadores.minutosDescanso} min
+                                {indicadores.descansoExcedido
+                                  ? " · EXCEDIDO (>60M)"
+                                  : ""}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td className="px-6 py-4 font-mono text-xs text-gray-600">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span>{formatearHora(asistencia.hora_salida)}</span>
+                          {indicadores.esSalidaTardia && (
+                            <span className="inline-flex items-center gap-0.5 rounded-sm border border-brand-gold/60 bg-brand-beige/70 px-1.5 py-0.5 font-sans text-[8px] font-bold uppercase tracking-wider text-brand-dark">
+                              TIEMPO ADICIONAL
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <span
-                          className={`inline-block rounded-sm border px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest ${chip.className}`}
-                        >
-                          {chip.label}
-                        </span>
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          <span
+                            className={`inline-block rounded-sm border px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest ${chip.className}`}
+                          >
+                            {chip.label}
+                          </span>
+                          {indicadores.descansoExcedido && (
+                            <span className="inline-flex items-center gap-1 rounded-sm border border-status-danger/50 bg-status-danger/10 px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-status-danger-dark">
+                              <AlertTriangleIcon className="h-2.5 w-2.5" />
+                              DESCANSO EXCEDIDO
+                            </span>
+                          )}
+                          {indicadores.esSalidaTardia && (
+                            <span className="inline-flex items-center gap-1 rounded-sm border border-brand-gold/60 bg-brand-beige/70 px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-brand-dark">
+                              TIEMPO ADICIONAL (+{indicadores.minutosAdicionales}M)
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

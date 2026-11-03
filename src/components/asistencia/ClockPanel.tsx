@@ -10,11 +10,14 @@ import {
 } from "@/components/ui/icons";
 import {
   calcularEstatusEntrada,
+  calcularMinutosDescanso,
   formatFechaLarga,
   formatHora12,
   formatReloj,
   horaLimite,
+  LIMITE_DESCANSO_MINUTOS,
   obtenerFechaHoyLocal,
+  parsearHoraAMinutos,
 } from "@/lib/asistencia";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -47,6 +50,8 @@ interface ClockPanelProps {
   asistenciaHoyId?: string | null;
   yaMarcoHoy?: boolean;
   horaEntradaHoy?: string | null;
+  horaInicioDescansoHoy?: string | null;
+  horaFinDescansoHoy?: string | null;
   horaSalidaHoy?: string | null;
   onCheckIn?: (ubicacion: UbicacionMarcaje) => void;
 }
@@ -150,6 +155,8 @@ export default function ClockPanel({
   asistenciaHoyId = null,
   yaMarcoHoy = false,
   horaEntradaHoy = null,
+  horaInicioDescansoHoy = null,
+  horaFinDescansoHoy = null,
   horaSalidaHoy = null,
   onCheckIn,
 }: ClockPanelProps) {
@@ -172,18 +179,35 @@ export default function ClockPanel({
   const [tieneEntrada, setTieneEntrada] = useState<boolean>(
     Boolean(horaEntradaHoy) || yaMarcoHoy
   );
+  const [tieneInicioDescanso, setTieneInicioDescanso] = useState<boolean>(
+    Boolean(horaInicioDescansoHoy)
+  );
+  const [tieneFinDescanso, setTieneFinDescanso] = useState<boolean>(
+    Boolean(horaFinDescansoHoy)
+  );
   const [tieneSalida, setTieneSalida] = useState<boolean>(
     Boolean(horaSalidaHoy)
   );
   const [horaEntradaRegistrada, setHoraEntradaRegistrada] = useState<
     string | null
   >(horaEntradaHoy);
+  const [horaInicioDescansoRegistrada, setHoraInicioDescansoRegistrada] =
+    useState<string | null>(horaInicioDescansoHoy);
+  const [horaFinDescansoRegistrada, setHoraFinDescansoRegistrada] = useState<
+    string | null
+  >(horaFinDescansoHoy);
   const [horaSalidaRegistrada, setHoraSalidaRegistrada] = useState<
     string | null
   >(horaSalidaHoy);
 
   const jornadaCompletada = tieneEntrada && tieneSalida;
-  const esModoSalida = tieneEntrada && !tieneSalida;
+  const enDescanso =
+    tieneEntrada && tieneInicioDescanso && !tieneFinDescanso && !tieneSalida;
+  const descansoCompletado =
+    tieneEntrada && tieneInicioDescanso && tieneFinDescanso && !tieneSalida;
+  const puedeIniciarDescanso =
+    tieneEntrada && !tieneInicioDescanso && !tieneSalida;
+  const esModoSalida = tieneEntrada && !tieneSalida && !enDescanso;
 
   const [ahora, setAhora] = useState<Date | null>(null);
   const [fechaHoyLocal, setFechaHoyLocal] = useState<string>(() =>
@@ -206,13 +230,26 @@ export default function ClockPanel({
   useEffect(() => {
     setRegistroId(asistenciaHoyId);
     const entradaActiva = Boolean(horaEntradaHoy) || yaMarcoHoy;
+    const inicioDescActiva = Boolean(horaInicioDescansoHoy);
+    const finDescActiva = Boolean(horaFinDescansoHoy);
     const salidaActiva = Boolean(horaSalidaHoy);
     setTieneEntrada(entradaActiva);
+    setTieneInicioDescanso(inicioDescActiva);
+    setTieneFinDescanso(finDescActiva);
     setTieneSalida(salidaActiva);
     setHoraEntradaRegistrada(horaEntradaHoy);
+    setHoraInicioDescansoRegistrada(horaInicioDescansoHoy);
+    setHoraFinDescansoRegistrada(horaFinDescansoHoy);
     setHoraSalidaRegistrada(horaSalidaHoy);
     setStatus(entradaActiva && salidaActiva ? "completed" : "idle");
-  }, [asistenciaHoyId, horaEntradaHoy, horaSalidaHoy, yaMarcoHoy]);
+  }, [
+    asistenciaHoyId,
+    horaEntradaHoy,
+    horaInicioDescansoHoy,
+    horaFinDescansoHoy,
+    horaSalidaHoy,
+    yaMarcoHoy,
+  ]);
 
   // Reloj y detección de cambio de día calendario (medianoche local)
   useEffect(() => {
@@ -249,7 +286,7 @@ export default function ClockPanel({
       const [asistenciaRes, colabRes] = await Promise.all([
         supabase
           .from("asistencias")
-          .select("id, fecha, hora_entrada, hora_salida")
+          .select("*")
           .eq("colaborador_id", targetUserId)
           .eq("fecha", fechaHoyLocal)
           .order("created_at", { ascending: false })
@@ -276,18 +313,30 @@ export default function ClockPanel({
 
       if (registroHoy && registroHoy.fecha === fechaHoyLocal) {
         const entradaActiva = Boolean(registroHoy.hora_entrada);
+        const inicioDescActiva = Boolean(registroHoy.hora_inicio_descanso);
+        const finDescActiva = Boolean(registroHoy.hora_fin_descanso);
         const salidaActiva = Boolean(registroHoy.hora_salida);
         setRegistroId(registroHoy.id);
         setTieneEntrada(entradaActiva);
+        setTieneInicioDescanso(inicioDescActiva);
+        setTieneFinDescanso(finDescActiva);
         setTieneSalida(salidaActiva);
         setHoraEntradaRegistrada(registroHoy.hora_entrada ?? null);
+        setHoraInicioDescansoRegistrada(
+          registroHoy.hora_inicio_descanso ?? null
+        );
+        setHoraFinDescansoRegistrada(registroHoy.hora_fin_descanso ?? null);
         setHoraSalidaRegistrada(registroHoy.hora_salida ?? null);
         setStatus(entradaActiva && salidaActiva ? "completed" : "idle");
       } else {
         setRegistroId(null);
         setTieneEntrada(false);
+        setTieneInicioDescanso(false);
+        setTieneFinDescanso(false);
         setTieneSalida(false);
         setHoraEntradaRegistrada(null);
+        setHoraInicioDescansoRegistrada(null);
+        setHoraFinDescansoRegistrada(null);
         setHoraSalidaRegistrada(null);
         setStatus("idle");
         setMensajeError(null);
@@ -310,6 +359,23 @@ export default function ClockPanel({
   );
 
   const salidaBloqueadaPorCooldown = esModoSalida && minutosEsperaSalida > 0;
+
+  const minutosDescansoRegistrados = useMemo(
+    () =>
+      calcularMinutosDescanso(
+        horaInicioDescansoRegistrada,
+        horaFinDescansoRegistrada
+      ),
+    [horaInicioDescansoRegistrada, horaFinDescansoRegistrada]
+  );
+
+  const minutosDescansoEnCurso = useMemo(() => {
+    if (!enDescanso || !ahora || !horaInicioDescansoRegistrada) return null;
+    const inicioMin = parsearHoraAMinutos(horaInicioDescansoRegistrada);
+    if (inicioMin === null) return null;
+    const actualMin = ahora.getHours() * 60 + ahora.getMinutes();
+    return Math.max(0, actualMin - inicioMin);
+  }, [ahora, enDescanso, horaInicioDescansoRegistrada]);
 
   const evaluacion = useMemo(() => {
     if (!puntoReal) return null;
@@ -504,6 +570,166 @@ export default function ClockPanel({
   };
 
   /**
+   * Flujo de Inicio de Descanso (Iniciar Descanso) con validación de GPS y geocerca.
+   */
+  const handleIniciarDescanso = async () => {
+    if (isLoading || isLocating || !puedeIniciarDescanso) return;
+
+    setIsLoading(true);
+    setStatus("locating");
+    setMensajeError(null);
+
+    try {
+      const { enRango, marcajePayload, ubicacionJsonb, fechaActual } =
+        await capturarYValidarPosicion();
+
+      if (!enRango) {
+        setStatus("out_of_range");
+        setMensajeError(
+          "Estás fuera de tu zona autorizada. Acércate a la oficina o punto de trabajo para iniciar tu descanso."
+        );
+        return;
+      }
+
+      const supabase = createClient();
+      let targetUserId = userId;
+      if (!targetUserId) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        targetUserId = user?.id;
+      }
+
+      if (!targetUserId) {
+        setStatus("error");
+        setMensajeError(
+          "Tu sesión ha expirado. Inicia sesión nuevamente para registrar tu descanso."
+        );
+        return;
+      }
+
+      const fechaIso = obtenerFechaHoyLocal(fechaActual);
+      const hh = String(fechaActual.getHours()).padStart(2, "0");
+      const min = String(fechaActual.getMinutes()).padStart(2, "0");
+      const ss = String(fechaActual.getSeconds()).padStart(2, "0");
+      const horaActualStr = `${hh}:${min}:${ss}`;
+
+      const query = supabase.from("asistencias").update({
+        hora_inicio_descanso: horaActualStr,
+        ubicacion_inicio_descanso: ubicacionJsonb as unknown as Json,
+      });
+
+      const { error: updateError } = registroId
+        ? await query.eq("id", registroId)
+        : await query.eq("colaborador_id", targetUserId).eq("fecha", fechaIso);
+
+      if (updateError) {
+        setStatus("error");
+        setMensajeError(
+          `No se pudo iniciar el descanso: ${updateError.message}`
+        );
+        return;
+      }
+
+      setTieneInicioDescanso(true);
+      setHoraInicioDescansoRegistrada(horaActualStr);
+      setStatus("idle");
+      onCheckIn?.(marcajePayload);
+      router.refresh();
+    } catch (err) {
+      setStatus("error");
+      setMensajeError(
+        err instanceof Error
+          ? err.message
+          : "Ocurrió un error al acceder al GPS del navegador."
+      );
+    } finally {
+      setIsLocating(false);
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Flujo de Fin de Descanso (Regresar a Actividades) con validación de GPS y geocerca.
+   */
+  const handleFinalizarDescanso = async () => {
+    if (isLoading || isLocating || !enDescanso) return;
+
+    setIsLoading(true);
+    setStatus("locating");
+    setMensajeError(null);
+
+    try {
+      const { enRango, marcajePayload, ubicacionJsonb, fechaActual } =
+        await capturarYValidarPosicion();
+
+      if (!enRango) {
+        setStatus("out_of_range");
+        setMensajeError(
+          "Estás fuera de tu zona autorizada. Acércate a la oficina o punto de trabajo para regresar a actividades."
+        );
+        return;
+      }
+
+      const supabase = createClient();
+      let targetUserId = userId;
+      if (!targetUserId) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        targetUserId = user?.id;
+      }
+
+      if (!targetUserId) {
+        setStatus("error");
+        setMensajeError(
+          "Tu sesión ha expirado. Inicia sesión nuevamente para registrar tu regreso."
+        );
+        return;
+      }
+
+      const fechaIso = obtenerFechaHoyLocal(fechaActual);
+      const hh = String(fechaActual.getHours()).padStart(2, "0");
+      const min = String(fechaActual.getMinutes()).padStart(2, "0");
+      const ss = String(fechaActual.getSeconds()).padStart(2, "0");
+      const horaActualStr = `${hh}:${min}:${ss}`;
+
+      const query = supabase.from("asistencias").update({
+        hora_fin_descanso: horaActualStr,
+        ubicacion_fin_descanso: ubicacionJsonb as unknown as Json,
+      });
+
+      const { error: updateError } = registroId
+        ? await query.eq("id", registroId)
+        : await query.eq("colaborador_id", targetUserId).eq("fecha", fechaIso);
+
+      if (updateError) {
+        setStatus("error");
+        setMensajeError(
+          `No se pudo registrar el fin de descanso: ${updateError.message}`
+        );
+        return;
+      }
+
+      setTieneFinDescanso(true);
+      setHoraFinDescansoRegistrada(horaActualStr);
+      setStatus("idle");
+      onCheckIn?.(marcajePayload);
+      router.refresh();
+    } catch (err) {
+      setStatus("error");
+      setMensajeError(
+        err instanceof Error
+          ? err.message
+          : "Ocurrió un error al acceder al GPS del navegador."
+      );
+    } finally {
+      setIsLocating(false);
+      setIsLoading(false);
+    }
+  };
+
+  /**
    * Ejecuta el registro de salida (Check-out) tras validar GPS y geocerca.
    */
   const ejecutarCheckOut = async () => {
@@ -591,6 +817,7 @@ export default function ClockPanel({
       isLoading ||
       isLocating ||
       jornadaCompletada ||
+      enDescanso ||
       salidaBloqueadaPorCooldown
     ) {
       return;
@@ -605,15 +832,12 @@ export default function ClockPanel({
     await ejecutarCheckOut();
   };
 
-  const obtenerTextoBoton = (): string => {
+  const obtenerTextoBotonPrincipal = (): string => {
     if (isLocating || status === "locating") {
       return "OBTENIENDO TU UBICACIÓN...";
     }
     if (jornadaCompletada || status === "completed") {
       return "JORNADA COMPLETADA";
-    }
-    if (salidaBloqueadaPorCooldown) {
-      return `SALIDA BLOQUEADA (ESPERA ${minutosEsperaSalida} MIN)`;
     }
     if (status === "out_of_range") {
       return "FUERA DE RANGO · REINTENTAR";
@@ -621,11 +845,23 @@ export default function ClockPanel({
     if (status === "error") {
       return "ERROR DE GPS · REINTENTAR";
     }
-    return esModoSalida ? "MARCAR SALIDA" : "MARCAR ENTRADA";
+    if (!tieneEntrada) {
+      return "MARCAR ENTRADA";
+    }
+    if (enDescanso) {
+      return "REGRESAR A ACTIVIDADES";
+    }
+    if (salidaBloqueadaPorCooldown) {
+      return `SALIDA BLOQUEADA (ESPERA ${minutosEsperaSalida} MIN)`;
+    }
+    return "MARCAR SALIDA";
   };
 
-  const botonDeshabilitado =
+  const botonSalidaDeshabilitado =
     isLoading || isLocating || jornadaCompletada || salidaBloqueadaPorCooldown;
+
+  const botonAccionGeneralDeshabilitado =
+    isLoading || isLocating || jornadaCompletada;
 
   return (
     <section className="flex flex-col gap-5 rounded-md border-t-4 border-status-success bg-brand-surface p-6 shadow-sm">
@@ -669,41 +905,139 @@ export default function ClockPanel({
               "Entrada: Sin registrar"
             )}
           </p>
+          {horaInicioDescansoRegistrada && (
+            <p className="mt-0.5 text-[10px] font-semibold text-gray-500">
+              Descanso:{" "}
+              {formatHora12(horaInicioDescansoRegistrada.slice(0, 5))}
+              {" - "}
+              {horaFinDescansoRegistrada
+                ? `${formatHora12(horaFinDescansoRegistrada.slice(0, 5))}${
+                    minutosDescansoRegistrados !== null
+                      ? ` (${minutosDescansoRegistrados} min)`
+                      : ""
+                  }`
+                : `En curso${
+                    minutosDescansoEnCurso !== null
+                      ? ` (${minutosDescansoEnCurso} min)`
+                      : ""
+                  }`}
+            </p>
+          )}
         </div>
-        {entrada &&
-          (entrada.estatus === "retardo" ? (
-            <span className="flex items-center gap-1 rounded border border-status-warning/50 bg-status-warning/10 px-2.5 py-1 text-[10px] font-bold uppercase text-status-warning-dark">
-              <AlertTriangleIcon className="h-3 w-3" />
-              RETARDO (+{entrada.minutos_retardo} MIN)
+        <div className="flex flex-col items-end gap-1">
+          {entrada &&
+            (entrada.estatus === "retardo" ? (
+              <span className="flex items-center gap-1 rounded border border-status-warning/50 bg-status-warning/10 px-2.5 py-1 text-[10px] font-bold uppercase text-status-warning-dark">
+                <AlertTriangleIcon className="h-3 w-3" />
+                RETARDO (+{entrada.minutos_retardo} MIN)
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 rounded border border-status-success/40 bg-status-success/10 px-2.5 py-1 text-[10px] font-bold uppercase text-status-success-dark">
+                <CheckCircleIcon className="h-3 w-3" />
+                A TIEMPO
+              </span>
+            ))}
+          {enDescanso && (
+            <span className="flex items-center gap-1 rounded border border-brand-gold/50 bg-brand-beige/60 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-brand-dark">
+              EN DESCANSO
+              {minutosDescansoEnCurso !== null &&
+              minutosDescansoEnCurso > LIMITE_DESCANSO_MINUTOS
+                ? ` · EXCEDIDO (${minutosDescansoEnCurso}M)`
+                : ""}
             </span>
-          ) : (
-            <span className="flex items-center gap-1 rounded border border-status-success/40 bg-status-success/10 px-2.5 py-1 text-[10px] font-bold uppercase text-status-success-dark">
-              <CheckCircleIcon className="h-3 w-3" />
-              A TIEMPO
-            </span>
-          ))}
+          )}
+          {!enDescanso &&
+            minutosDescansoRegistrados !== null &&
+            minutosDescansoRegistrados > LIMITE_DESCANSO_MINUTOS && (
+              <span className="flex items-center gap-1 rounded border border-status-danger/40 bg-status-danger/10 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-status-danger-dark">
+                <AlertTriangleIcon className="h-3 w-3" />
+                DESCANSO EXCEDIDO ({minutosDescansoRegistrados} MIN)
+              </span>
+            )}
+        </div>
       </div>
 
       {/* Ubicación evaluada */}
       <UbicacionBlock evaluacion={evaluacion} isLocating={isLocating} />
 
-      {/* Acción principal */}
-      <div>
-        <button
-          type="button"
-          onClick={esModoSalida ? handleCheckOut : handleCheckIn}
-          disabled={botonDeshabilitado}
-          className={`flex h-14 w-full items-center justify-center gap-2.5 rounded-md text-white shadow-md transition-all disabled:cursor-not-allowed disabled:opacity-65 ${BUTTON_STYLES[status]}`}
-        >
-          {jornadaCompletada || status === "completed" ? (
-            <CheckCircleIcon className="h-5 w-5" />
-          ) : (
+      {/* Máquina de Estados de Asistencia (Misión 2) */}
+      <div className="flex flex-col gap-2.5">
+        {!tieneEntrada && (
+          <button
+            type="button"
+            onClick={handleCheckIn}
+            disabled={botonAccionGeneralDeshabilitado}
+            className={`flex h-14 w-full items-center justify-center gap-2.5 rounded-md text-white shadow-md transition-all disabled:cursor-not-allowed disabled:opacity-65 ${BUTTON_STYLES[status]}`}
+          >
             <MapPinIcon className="h-5 w-5 text-brand-gold" />
-          )}
-          <span className="text-xs font-bold uppercase tracking-widest">
-            {obtenerTextoBoton()}
-          </span>
-        </button>
+            <span className="text-xs font-bold uppercase tracking-widest">
+              {obtenerTextoBotonPrincipal()}
+            </span>
+          </button>
+        )}
+
+        {puedeIniciarDescanso && (
+          <>
+            <button
+              type="button"
+              onClick={handleIniciarDescanso}
+              disabled={botonAccionGeneralDeshabilitado}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-md border-2 border-brand-gold bg-brand-beige/60 text-brand-dark shadow-sm transition-colors hover:bg-brand-beige disabled:cursor-not-allowed disabled:opacity-65"
+            >
+              <ClockIcon className="h-4 w-4 text-brand-gold" />
+              <span className="text-xs font-bold uppercase tracking-widest">
+                {isLocating || status === "locating"
+                  ? "OBTENIENDO TU UBICACIÓN..."
+                  : "INICIAR DESCANSO"}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCheckOut}
+              disabled={botonSalidaDeshabilitado}
+              className={`flex h-14 w-full items-center justify-center gap-2.5 rounded-md text-white shadow-md transition-all disabled:cursor-not-allowed disabled:opacity-65 ${BUTTON_STYLES[status]}`}
+            >
+              <MapPinIcon className="h-5 w-5 text-brand-gold" />
+              <span className="text-xs font-bold uppercase tracking-widest">
+                {obtenerTextoBotonPrincipal()}
+              </span>
+            </button>
+          </>
+        )}
+
+        {enDescanso && (
+          /* Durante el descanso: muestra "Regresar a Actividades" y oculta el cierre de turno */
+          <button
+            type="button"
+            onClick={handleFinalizarDescanso}
+            disabled={botonAccionGeneralDeshabilitado}
+            className={`flex h-14 w-full items-center justify-center gap-2.5 rounded-md text-white shadow-md transition-all disabled:cursor-not-allowed disabled:opacity-65 ${BUTTON_STYLES[status]}`}
+          >
+            <MapPinIcon className="h-5 w-5 text-brand-gold" />
+            <span className="text-xs font-bold uppercase tracking-widest">
+              {obtenerTextoBotonPrincipal()}
+            </span>
+          </button>
+        )}
+
+        {(descansoCompletado || jornadaCompletada) && (
+          <button
+            type="button"
+            onClick={handleCheckOut}
+            disabled={botonSalidaDeshabilitado}
+            className={`flex h-14 w-full items-center justify-center gap-2.5 rounded-md text-white shadow-md transition-all disabled:cursor-not-allowed disabled:opacity-65 ${BUTTON_STYLES[status]}`}
+          >
+            {jornadaCompletada || status === "completed" ? (
+              <CheckCircleIcon className="h-5 w-5" />
+            ) : (
+              <MapPinIcon className="h-5 w-5 text-brand-gold" />
+            )}
+            <span className="text-xs font-bold uppercase tracking-widest">
+              {obtenerTextoBotonPrincipal()}
+            </span>
+          </button>
+        )}
 
         {mensajeError && (
           <p

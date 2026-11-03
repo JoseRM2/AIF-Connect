@@ -105,7 +105,7 @@ export default async function AsistenciaPage() {
 
   const { data: registroHoy } = await supabase
     .from("asistencias")
-    .select("id, fecha, hora_entrada, hora_salida, ubicacion_entrada")
+    .select("*")
     .eq("colaborador_id", user.id)
     .eq("fecha", hoyIso)
     .order("created_at", { ascending: false })
@@ -118,6 +118,12 @@ export default async function AsistenciaPage() {
   const horaEntradaHoy = tieneRegistroHoy
     ? (registroHoy?.hora_entrada ?? null)
     : null;
+  const horaInicioDescansoHoy = tieneRegistroHoy
+    ? (registroHoy?.hora_inicio_descanso ?? null)
+    : null;
+  const horaFinDescansoHoy = tieneRegistroHoy
+    ? (registroHoy?.hora_fin_descanso ?? null)
+    : null;
   const horaSalidaHoy = tieneRegistroHoy
     ? (registroHoy?.hora_salida ?? null)
     : null;
@@ -129,9 +135,7 @@ export default async function AsistenciaPage() {
   // 3. Consultar los últimos 20 registros reales de `asistencias` del colaborador
   const { data: historialDb } = await supabase
     .from("asistencias")
-    .select(
-      "id, colaborador_id, fecha, hora_entrada, hora_salida, estatus, ubicacion_entrada, ubicacion_salida"
-    )
+    .select("*")
     .eq("colaborador_id", user.id)
     .order("fecha", { ascending: false })
     .limit(20);
@@ -141,9 +145,19 @@ export default async function AsistenciaPage() {
     colaborador_id: fila.colaborador_id,
     fecha: fila.fecha,
     hora_entrada: fila.hora_entrada ? fila.hora_entrada.slice(0, 5) : null,
+    hora_inicio_descanso: fila.hora_inicio_descanso
+      ? fila.hora_inicio_descanso.slice(0, 5)
+      : null,
+    hora_fin_descanso: fila.hora_fin_descanso
+      ? fila.hora_fin_descanso.slice(0, 5)
+      : null,
     hora_salida: fila.hora_salida ? fila.hora_salida.slice(0, 5) : null,
     estatus: normalizarEstatusAsistencia(fila.estatus),
     ubicacion_entrada: normalizarUbicacion(fila.ubicacion_entrada),
+    ubicacion_inicio_descanso: normalizarUbicacion(
+      fila.ubicacion_inicio_descanso
+    ),
+    ubicacion_fin_descanso: normalizarUbicacion(fila.ubicacion_fin_descanso),
     ubicacion_salida: normalizarUbicacion(fila.ubicacion_salida),
   }));
 
@@ -159,6 +173,8 @@ export default async function AsistenciaPage() {
   const alertasFueraDeRangoCount = registrosHistorial.filter(
     (r) =>
       r.ubicacion_entrada?.dentro_de_zona === false ||
+      r.ubicacion_inicio_descanso?.dentro_de_zona === false ||
+      r.ubicacion_fin_descanso?.dentro_de_zona === false ||
       r.ubicacion_salida?.dentro_de_zona === false
   ).length;
 
@@ -215,6 +231,8 @@ export default async function AsistenciaPage() {
             asistenciaHoyId={asistenciaHoyId}
             yaMarcoHoy={yaMarcoHoy}
             horaEntradaHoy={horaEntradaHoy}
+            horaInicioDescansoHoy={horaInicioDescansoHoy}
+            horaFinDescansoHoy={horaFinDescansoHoy}
             horaSalidaHoy={horaSalidaHoy}
           />
 
