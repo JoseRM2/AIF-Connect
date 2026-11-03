@@ -2,6 +2,10 @@
 
 import { useEffect, useId, useState } from "react";
 import Link from "next/link";
+import {
+  obtenerNotificacionesPendientesAction,
+  type NotificacionPendienteItem,
+} from "@/app/actions/notificaciones";
 import { obtenerSolicitudesEquipoAction } from "@/app/actions/jefatura";
 import { useAuthRole } from "@/components/auth/AuthRoleContext";
 import {
@@ -14,36 +18,57 @@ import {
 import type { RolSistema } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/client";
 
-export interface NotificacionPendienteItem {
-  id: string;
-  categoria:
-    | "solicitud_jefatura"
-    | "solicitud_rh"
-    | "comentario_muro"
-    | "ticket_asistencia";
-  etiqueta: string;
-  titulo: string;
-  detalle: string;
-  href: string;
-}
+export type { NotificacionPendienteItem };
 
 interface NotificacionesProactivasModalProps {
   userId?: string;
   rolSistema?: RolSistema | string | null;
   esJefatura?: boolean;
+  notificacionesIniciales?: NotificacionPendienteItem[];
 }
 
 const SESSION_STORAGE_KEY = "aif_notificaciones_inicio_cerrado";
+const SESSION_LOGIN_RECIENTE_KEY = "aif_recien_iniciado_sesion";
 
 /**
  * Bandera en memoria del módulo cliente:
  * - Solo cambia a `true` cuando el usuario pulsa explícitamente el botón de cerrar.
  * - Al hacer clic en una tarjeta para ir a atender una solicitud, NO se marca como cerrado,
  *   de modo que al volver a "Inicio" desde la Sidebar el modal sigue abierto para atender las demás.
- * - Se reinicia a `false` si el usuario recarga la página por completo (F5 / Cmd+R).
+ * - Se reinicia a `false` al iniciar sesión, cerrar sesión o recargar la página (F5 / Cmd+R).
  */
 let cerradoPorBotonEnSesion = false;
+let ultimoUserIdEnMemoria: string | null = null;
 let recargaVerificadaEnCarga = false;
+
+function obtenerKeyUsuario(userId?: string | null): string {
+  return userId ? `${SESSION_STORAGE_KEY}_${userId}` : SESSION_STORAGE_KEY;
+}
+
+/**
+ * Reinicia el estado de cierre de notificaciones al iniciar o cerrar sesión
+ * para garantizar que el overlay con blur aparezca siempre en el primer inicio de sesión.
+ */
+export function reiniciarEstadoNotificacionesInicio(marcarLoginReciente = false) {
+  cerradoPorBotonEnSesion = false;
+  ultimoUserIdEnMemoria = null;
+
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    for (let i = window.sessionStorage.length - 1; i >= 0; i--) {
+      const k = window.sessionStorage.key(i);
+      if (k && k.startsWith(SESSION_STORAGE_KEY)) {
+        window.sessionStorage.removeItem(k);
+      }
+    }
+    if (marcarLoginReciente) {
+      window.sessionStorage.setItem(SESSION_LOGIN_RECIENTE_KEY, "true");
+    }
+  } catch {
+    // Ignorar errores de sessionStorage
+  }
+}
 
 interface ColaboradorRel {
   nombre_completo?: string | null;
@@ -79,6 +104,7 @@ export default function NotificacionesProactivasModal({
   userId: userIdProp,
   rolSistema: rolSistemaProp,
   esJefatura: esJefaturaProp,
+  notificacionesIniciales,
 }: NotificacionesProactivasModalProps) {
   const uid = useId();
   const contexto = useAuthRole();
@@ -94,17 +120,52 @@ export default function NotificacionesProactivasModal({
     Boolean(esJefaturaProp ?? contexto.esJefatura);
   const esRecursosHumanos = rolSistema === "Recursos Humanos";
 
+  const tieneIniciales = Array.isArray(notificacionesIniciales);
   const [notificaciones, setNotificaciones] = useState<
     NotificacionPendienteItem[]
-  >([]);
-  const [cargando, setCargando] = useState<boolean>(true);
+  >(notificacionesIniciales ?? []);
+  const [cargando, setCargando] = useState<boolean>(!tieneIniciales);
   const [cerradoPorUsuario, setCerradoPorUsuario] = useState<boolean>(false);
   const [abiertoDesdeTarjeta, setAbiertoDesdeTarjeta] =
     useState<boolean>(false);
 
-  // Verificar estado en sessionStorage + detectar recarga completa del navegador
+  // Sincronizar si llegan nuevas notificaciones iniciales desde el Server Component
+  useEffect(() => {
+    if (Array.isArray(notificacionesIniciales)) {
+      setNotificaciones(notificacionesIniciales);
+      setCargando(false);
+    }
+  }, [notificacionesIniciales]);
+
+  // Verificar estado en sessionStorage + detectar nuevo inicio de sesión o recarga completa
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // Si cambió el usuario autenticado en memoria, reiniciar el estado de cerrado
+    if (userId && ultimoUserIdEnMemoria && ultimoUserIdEnMemoria !== userId) {
+      cerradoPorBotonEnSesion = false;
+    }
+    if (userId) {
+      ultimoUserIdEnMemoria = userId;
+    }
+
+    const keyUsuario = obtenerKeyUsuario(userId);
+
+    try {
+      const loginReciente = window.sessionStorage.getItem(
+        SESSION_LOGIN_RECIENTE_KEY
+      );
+      if (loginReciente === "true") {
+        window.sessionStorage.removeItem(SESSION_LOGIN_RECIENTE_KEY);
+        window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        window.sessionStorage.removeItem(keyUsuario);
+        cerradoPorBotonEnSesion = false;
+        setCerradoPorUsuario(false);
+        return;
+      }
+    } catch {
+      // Ignorar errores de sessionStorage
+    }
 
     if (!recargaVerificadaEnCarga) {
       recargaVerificadaEnCarga = true;
@@ -116,41 +177,60 @@ export default function NotificacionesProactivasModal({
       if (fueReload) {
         try {
           window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+          window.sessionStorage.removeItem(keyUsuario);
         } catch {
           // Ignorar errores de sessionStorage
         }
         cerradoPorBotonEnSesion = false;
+        setCerradoPorUsuario(false);
+        return;
       }
     }
 
     try {
-      const guardado = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+      const guardado =
+        window.sessionStorage.getItem(keyUsuario) ??
+        window.sessionStorage.getItem(SESSION_STORAGE_KEY);
       if (cerradoPorBotonEnSesion || guardado === "true") {
         setCerradoPorUsuario(true);
+      } else {
+        setCerradoPorUsuario(false);
       }
     } catch {
-      if (cerradoPorBotonEnSesion) {
-        setCerradoPorUsuario(true);
-      }
+      setCerradoPorUsuario(cerradoPorBotonEnSesion);
     }
-  }, []);
+  }, [userId]);
 
-  // Consultas condicionales por rol a Supabase (siempre se cargan para poblar la tarjeta y el overlay)
+  // Consultas a servidor y respaldo cliente para obtener todas las notificaciones pendientes
   useEffect(() => {
-    if (!tieneJefatura && !esRecursosHumanos) {
-      setNotificaciones([]);
-      setCargando(false);
-      return;
-    }
-
     let cancelado = false;
 
     async function cargarNotificacionesPendientes() {
-      setCargando(true);
-      const supabase = createClient();
-      const itemsAcumulados: NotificacionPendienteItem[] = [];
+      if (!tieneIniciales) {
+        setCargando(true);
+      }
 
       try {
+        // 1. Vía principal: Server Action (resuelve perfil real, evita errores de ENUM 22P02 y bloqueos RLS)
+        const resServidor = await obtenerNotificacionesPendientesAction();
+        if (!cancelado && resServidor.ok) {
+          setNotificaciones(resServidor.notificaciones);
+          setCargando(false);
+          return;
+        }
+
+        // 2. Respaldo cliente directo a Supabase si el Server Action no respondió
+        if (!tieneJefatura && !esRecursosHumanos) {
+          if (!cancelado) {
+            setNotificaciones([]);
+            setCargando(false);
+          }
+          return;
+        }
+
+        const supabase = createClient();
+        const itemsAcumulados: NotificacionPendienteItem[] = [];
+
         let currentUserId = userId;
         if (!currentUserId) {
           const {
@@ -159,80 +239,28 @@ export default function NotificacionesProactivasModal({
           currentUserId = user?.id ?? null;
         }
 
-        // 1. Consultas Jefatura (`rol_sistema === 'Jefatura'` o `es_jefatura === true`)
         if (tieneJefatura && currentUserId) {
-          const { data: equipoData } = await supabase
-            .from("colaboradores")
-            .select("id, nombre_completo")
-            .eq("jefe_directo_id", currentUserId);
-
-          const equipoIds = (equipoData ?? []).map((c) => c.id);
-          let solicitudesJefeCargadas = false;
-
-          if (equipoIds.length > 0) {
-            const { data: solicitudesJefe, error: errorSolJefe } =
-              await supabase
-                .from("solicitudes")
-                .select(
-                  "id, tipo_solicitud, fecha_inicio, fecha_fin, estatus, colaboradores!solicitudes_colaborador_id_fkey(nombre_completo)"
-                )
-                .in("colaborador_id", equipoIds)
-                .in("estatus", ["Pendiente", "Pendiente_Jefe"])
-                .in("tipo_solicitud", [
-                  "Permiso sin goce de sueldo",
-                  "Permiso con goce de sueldo",
-                  "Vacaciones",
-                ])
-                .order("created_at", { ascending: false });
-
-            if (!errorSolJefe && solicitudesJefe && solicitudesJefe.length > 0) {
-              solicitudesJefeCargadas = true;
-              for (const sol of solicitudesJefe) {
-                const nombre = extraerNombreColaborador(
-                  (sol as Record<string, unknown>).colaboradores as
-                    | ColaboradorRel
-                    | ColaboradorRel[]
-                    | null
-                );
-                const tipoLower = (
-                  sol.tipo_solicitud || "solicitud"
-                ).toLowerCase();
-                itemsAcumulados.push({
-                  id: `jefe-sol-${sol.id}`,
-                  categoria: "solicitud_jefatura",
-                  etiqueta: "MI EQUIPO • PENDIENTE DE APROBACIÓN",
-                  titulo: `Nueva solicitud de ${tipoLower}`,
-                  detalle: `${nombre} · Del ${sol.fecha_inicio} al ${sol.fecha_fin}`,
-                  href: `/dashboard/jefatura?solicitudId=${sol.id}#solicitud-${sol.id}`,
-                });
-              }
-            }
-          }
-
-          if (!solicitudesJefeCargadas) {
-            const serverRes = await obtenerSolicitudesEquipoAction();
-            if (serverRes.ok) {
-              const pendientesEquipo = serverRes.solicitudes.filter((s) =>
-                esEstatusPendienteSolicitud(s.estatus)
-              );
-              for (const sol of pendientesEquipo) {
-                const tipoLower = (
-                  sol.tipo_solicitud || "solicitud"
-                ).toLowerCase();
-                itemsAcumulados.push({
-                  id: `jefe-sol-${sol.id}`,
-                  categoria: "solicitud_jefatura",
-                  etiqueta: "MI EQUIPO • PENDIENTE DE APROBACIÓN",
-                  titulo: `Nueva solicitud de ${tipoLower}`,
-                  detalle: `${sol.nombre_colaborador} · Del ${sol.fecha_inicio} al ${sol.fecha_fin}`,
-                  href: `/dashboard/jefatura?solicitudId=${sol.id}#solicitud-${sol.id}`,
-                });
-              }
+          const serverRes = await obtenerSolicitudesEquipoAction();
+          if (serverRes.ok) {
+            const pendientesEquipo = serverRes.solicitudes.filter((s) =>
+              esEstatusPendienteSolicitud(s.estatus)
+            );
+            for (const sol of pendientesEquipo) {
+              const tipoLower = (
+                sol.tipo_solicitud || "solicitud"
+              ).toLowerCase();
+              itemsAcumulados.push({
+                id: `jefe-sol-${sol.id}`,
+                categoria: "solicitud_jefatura",
+                etiqueta: "MI EQUIPO • PENDIENTE DE APROBACIÓN",
+                titulo: `Nueva solicitud de ${tipoLower}`,
+                detalle: `${sol.nombre_colaborador} · Del ${sol.fecha_inicio} al ${sol.fecha_fin}`,
+                href: `/dashboard/jefatura?solicitudId=${sol.id}#solicitud-${sol.id}`,
+              });
             }
           }
         }
 
-        // 2. Consultas Recursos Humanos (`rol_sistema === 'Recursos Humanos'`) en paralelo con Promise.all
         if (esRecursosHumanos) {
           const [solicitudesRhRes, comentariosMuroRes, ticketsAsistenciaRes] =
             await Promise.all([
@@ -241,8 +269,11 @@ export default function NotificacionesProactivasModal({
                 .select(
                   "id, tipo_solicitud, fecha_inicio, fecha_fin, estatus, colaboradores!colaborador_id(nombre_completo)"
                 )
-                .in("estatus", ["Pendiente", "Pendiente_RH", "Pendiente_Jefe"])
-                .in("tipo_solicitud", ["Vacaciones Pagadas", "Incapacidad"])
+                .in("tipo_solicitud", [
+                  "Vacaciones pagadas",
+                  "Vacaciones Pagadas",
+                  "Incapacidad",
+                ])
                 .order("created_at", { ascending: false }),
 
               supabase
@@ -259,11 +290,11 @@ export default function NotificacionesProactivasModal({
                 .select(
                   "id, fecha_incidencia, motivo_omision, estatus, colaboradores!tickets_asistencia_colaborador_id_fkey(nombre_completo)"
                 )
-                .in("estatus", ["Abierto", "En_Revision"])
                 .order("created_at", { ascending: false }),
             ]);
 
           for (const sol of solicitudesRhRes.data ?? []) {
+            if (!esEstatusPendienteSolicitud(sol.estatus)) continue;
             const nombre = extraerNombreColaborador(
               (sol as Record<string, unknown>).colaboradores as
                 | ColaboradorRel
@@ -305,19 +336,9 @@ export default function NotificacionesProactivasModal({
             });
           }
 
-          let ticketsRows = ticketsAsistenciaRes.data;
-          if (ticketsAsistenciaRes.error) {
-            const fallbackTickets = await supabase
-              .from("tickets_asistencia")
-              .select(
-                "id, fecha_incidencia, motivo_omision, estatus, colaboradores!colaborador_id(nombre_completo)"
-              )
-              .in("estatus", ["Abierto", "En_Revision"])
-              .order("created_at", { ascending: false });
-            ticketsRows = fallbackTickets.data;
-          }
-
-          for (const ticket of ticketsRows ?? []) {
+          for (const ticket of ticketsAsistenciaRes.data ?? []) {
+            const est = (ticket.estatus ?? "").trim().toLowerCase();
+            if (est !== "abierto" && est !== "en_revision") continue;
             const nombre = extraerNombreColaborador(
               (ticket as Record<string, unknown>).colaboradores as
                 | ColaboradorRel
@@ -350,13 +371,15 @@ export default function NotificacionesProactivasModal({
     return () => {
       cancelado = true;
     };
-  }, [esRecursosHumanos, tieneJefatura, userId]);
+  }, [esRecursosHumanos, tieneIniciales, tieneJefatura, userId]);
 
   const handleCerrarPorBoton = () => {
     cerradoPorBotonEnSesion = true;
     if (typeof window !== "undefined") {
       try {
+        const keyUsuario = obtenerKeyUsuario(userId);
         window.sessionStorage.setItem(SESSION_STORAGE_KEY, "true");
+        window.sessionStorage.setItem(keyUsuario, "true");
       } catch {
         // Ignorar errores de sessionStorage
       }
@@ -369,7 +392,9 @@ export default function NotificacionesProactivasModal({
     cerradoPorBotonEnSesion = false;
     if (typeof window !== "undefined") {
       try {
+        const keyUsuario = obtenerKeyUsuario(userId);
         window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        window.sessionStorage.removeItem(keyUsuario);
       } catch {
         // Ignorar errores de sessionStorage
       }
@@ -394,7 +419,7 @@ export default function NotificacionesProactivasModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [mostrarOverlay]);
+  });
 
   const renderIconoCategoria = (
     categoria: NotificacionPendienteItem["categoria"]

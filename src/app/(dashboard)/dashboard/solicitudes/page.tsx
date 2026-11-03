@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import GestionSolicitudesEquipo from "@/components/jefatura/GestionSolicitudesEquipo";
 import BalanceCards from "@/components/solicitudes/BalanceCards";
 import RequestList from "@/components/solicitudes/RequestList";
 import RequestsWorkspace from "@/components/solicitudes/RequestsWorkspace";
@@ -78,17 +77,14 @@ export default async function SolicitudesPage() {
     redirect("/login");
   }
 
-  // 1. Consultar `saldo_vacaciones`, `rol_sistema` y `es_jefatura` actual en `colaboradores`
+  // 1. Consultar `saldo_vacaciones` actual en `colaboradores`
   const { data: colaborador } = await supabase
     .from("colaboradores")
-    .select("saldo_vacaciones, rol_sistema, es_jefatura")
+    .select("saldo_vacaciones")
     .eq("id", user.id)
     .maybeSingle();
 
   const saldoDias = colaborador?.saldo_vacaciones ?? 0;
-  const esJefatura =
-    (colaborador?.rol_sistema ?? "").trim() === "Jefatura" ||
-    Boolean(colaborador?.es_jefatura);
 
   const saldoReal: SaldoVacaciones = {
     periodos_activos: saldoDias > 0 ? 1 : 0,
@@ -141,12 +137,7 @@ export default async function SolicitudesPage() {
       diasVacacionesPendientes={diasVacacionesPendientes}
       userId={user.id}
       metrics={<BalanceCards saldo={saldoReal} />}
-      list={
-        <div className="flex flex-col gap-8">
-          {esJefatura && <GestionSolicitudesEquipo />}
-          <RequestList solicitudes={solicitudesReales} />
-        </div>
-      }
+      list={<RequestList solicitudes={solicitudesReales} />}
     />
   );
 }

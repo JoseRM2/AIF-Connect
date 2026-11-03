@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { obtenerNotificacionesPendientesAction } from "@/app/actions/notificaciones";
 import DateTimeDisplay from "@/components/dashboard/DateTimeDisplay";
 import NotificacionesProactivasModal from "@/components/dashboard/NotificacionesProactivasModal";
 import UltimasPublicaciones from "@/components/dashboard/UltimasPublicaciones";
@@ -8,6 +9,7 @@ import {
   ChevronRightIcon,
   ClockIcon,
 } from "@/components/ui/icons";
+import { obtenerSesionYRol } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -22,13 +24,22 @@ export default async function DashboardHome() {
     redirect("/login");
   }
 
-  const { data: colaborador } = await supabase
-    .from("colaboradores")
-    .select("nombre_completo, saldo_vacaciones, rol_sistema, es_jefatura")
-    .eq("id", user.id)
-    .maybeSingle();
+  const [{ data: colaborador }, perfilSesion, notificacionesRes] =
+    await Promise.all([
+      supabase
+        .from("colaboradores")
+        .select("*")
+        .eq("id", user.id)
+        .maybeSingle(),
+      obtenerSesionYRol(),
+      obtenerNotificacionesPendientesAction(),
+    ]);
 
-  const nombreCompleto = colaborador?.nombre_completo?.trim() || "";
+  const nombreCompleto =
+    `${colaborador?.nombre ?? ""} ${colaborador?.apellidos ?? ""}`.trim() ||
+    colaborador?.nombre_completo?.trim() ||
+    perfilSesion?.nombreCompleto?.trim() ||
+    "";
   const primerNombre = nombreCompleto
     ? nombreCompleto.split(" ")[0]
     : user.email?.split("@")[0] || "Colaborador";
@@ -42,6 +53,11 @@ export default async function DashboardHome() {
     : "JR";
 
   const saldoVacaciones = colaborador?.saldo_vacaciones ?? 0;
+  const rolResuelto =
+    perfilSesion?.rolSistema ?? colaborador?.rol_sistema ?? "Colaborador";
+  const esJefaturaResuelta = Boolean(
+    perfilSesion?.esJefatura || colaborador?.es_jefatura
+  );
 
   return (
     <div className="flex min-h-full flex-col px-12 py-8">
@@ -124,8 +140,11 @@ export default async function DashboardHome() {
         {/* Últimas notificaciones (reemplaza Comunicado Oficial y controla el overlay con blur) */}
         <NotificacionesProactivasModal
           userId={user.id}
-          rolSistema={colaborador?.rol_sistema}
-          esJefatura={Boolean(colaborador?.es_jefatura)}
+          rolSistema={rolResuelto}
+          esJefatura={esJefaturaResuelta}
+          notificacionesIniciales={
+            notificacionesRes.ok ? notificacionesRes.notificaciones : undefined
+          }
         />
       </section>
 

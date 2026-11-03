@@ -4,6 +4,7 @@ import type { ComponentType, SVGProps } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuthRole } from "@/components/auth/AuthRoleContext";
+import { reiniciarEstadoNotificacionesInicio } from "@/components/dashboard/NotificacionesProactivasModal";
 import {
   FileTextIcon,
   HomeIcon,
@@ -67,6 +68,7 @@ export default function Sidebar({
     href === "/dashboard" ? pathname === href : pathname.startsWith(href);
 
   const handleLogout = async () => {
+    reiniciarEstadoNotificacionesInicio(false);
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/login");

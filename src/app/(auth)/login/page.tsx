@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { reiniciarEstadoNotificacionesInicio } from "@/components/dashboard/NotificacionesProactivasModal";
 import { createClient } from "@/lib/supabase/client";
 import { LoadingOverlay } from "@/components/ui/LoadingOverlay";
 
@@ -31,8 +32,12 @@ export default function LoginPage() {
         return;
       }
 
+      // Reiniciar cualquier cierre previo de notificaciones para que el overlay con blur
+      // aparezca inmediatamente en este primer inicio de sesión sobre Inicio (/dashboard)
+      reiniciarEstadoNotificacionesInicio(true);
+
       // Mantenemos isLoading = true mientras Next.js completa la transición a /dashboard
-      router.push("/dashboard");
+      router.replace("/dashboard");
       router.refresh();
     } catch {
       setError("Ocurrió un error al iniciar sesión. Intenta nuevamente.");
