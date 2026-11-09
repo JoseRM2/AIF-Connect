@@ -307,6 +307,7 @@ export interface Database {
           tipo?: string;
           fecha_inicio: string;
           fecha_fin: string;
+          dias_solicitados?: number | null;
           dias?: number | null;
           motivo: string | null;
           estatus:
@@ -326,6 +327,7 @@ export interface Database {
           tipo?: string;
           fecha_inicio: string;
           fecha_fin: string;
+          dias_solicitados?: number | null;
           dias?: number | null;
           motivo?: string | null;
           estatus?:
@@ -345,6 +347,7 @@ export interface Database {
           tipo?: string;
           fecha_inicio?: string;
           fecha_fin?: string;
+          dias_solicitados?: number | null;
           dias?: number | null;
           motivo?: string | null;
           estatus?:
@@ -477,6 +480,136 @@ export interface Database {
           {
             foreignKeyName: "muro_interacciones_publicacion_id_fkey";
             columns: ["publicacion_id"];
+            isOneToOne: false;
+            referencedRelation: "muro_publicaciones";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      expedientes_documentos: {
+        Row: {
+          id: string;
+          colaborador_id: string;
+          tipo_documento: string;
+          archivo_url: string;
+          nombre_archivo: string | null;
+          subido_por: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          colaborador_id: string;
+          tipo_documento: string;
+          archivo_url: string;
+          nombre_archivo?: string | null;
+          subido_por?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          colaborador_id?: string;
+          tipo_documento?: string;
+          archivo_url?: string;
+          nombre_archivo?: string | null;
+          subido_por?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "expedientes_documentos_colaborador_id_fkey";
+            columns: ["colaborador_id"];
+            isOneToOne: false;
+            referencedRelation: "colaboradores";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      calendario_eventos_rh: {
+        Row: {
+          id: string;
+          tipo:
+            | "feriado_empresa"
+            | "conmemorativo_muro"
+            | "plantilla_cumpleanos"
+            | "plantilla_aniversario"
+            | "registro_emision_anual"
+            | string;
+          fecha: string | null;
+          titulo: string;
+          contenido: string | null;
+          empresa_destino: string;
+          departamento_destino: string;
+          es_recurrente_anual: boolean;
+          requiere_acuse: boolean;
+          publicar_en_muro: boolean;
+          mostrar_overlay_privado: boolean;
+          alcance_muro: string;
+          imagenes_urls: Json;
+          muro_publicacion_id: string | null;
+          clave_emision: string | null;
+          creado_por: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          tipo:
+            | "feriado_empresa"
+            | "conmemorativo_muro"
+            | "plantilla_cumpleanos"
+            | "plantilla_aniversario"
+            | "registro_emision_anual"
+            | string;
+          fecha?: string | null;
+          titulo: string;
+          contenido?: string | null;
+          empresa_destino?: string;
+          departamento_destino?: string;
+          es_recurrente_anual?: boolean;
+          requiere_acuse?: boolean;
+          publicar_en_muro?: boolean;
+          mostrar_overlay_privado?: boolean;
+          alcance_muro?: string;
+          imagenes_urls?: Json;
+          muro_publicacion_id?: string | null;
+          clave_emision?: string | null;
+          creado_por?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          tipo?:
+            | "feriado_empresa"
+            | "conmemorativo_muro"
+            | "plantilla_cumpleanos"
+            | "plantilla_aniversario"
+            | "registro_emision_anual"
+            | string;
+          fecha?: string | null;
+          titulo?: string;
+          contenido?: string | null;
+          empresa_destino?: string;
+          departamento_destino?: string;
+          es_recurrente_anual?: boolean;
+          requiere_acuse?: boolean;
+          publicar_en_muro?: boolean;
+          mostrar_overlay_privado?: boolean;
+          alcance_muro?: string;
+          imagenes_urls?: Json;
+          muro_publicacion_id?: string | null;
+          clave_emision?: string | null;
+          creado_por?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "calendario_eventos_rh_muro_publicacion_id_fkey";
+            columns: ["muro_publicacion_id"];
             isOneToOne: false;
             referencedRelation: "muro_publicaciones";
             referencedColumns: ["id"];

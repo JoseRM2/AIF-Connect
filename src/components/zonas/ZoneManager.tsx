@@ -302,38 +302,50 @@ export default function ZoneManager({
     }
 
     if (idsDestino.length > 0) {
-      for (const colabId of idsDestino) {
-        const { data: colabActual, error: fetchError } = await supabase
+      const mapaFilas = new Map(
+        filasColaboradores.map((fila) => [fila.id, fila.zonas_geocerca])
+      );
+
+      const idsFaltantes = idsDestino.filter((id) => !mapaFilas.has(id));
+      if (idsFaltantes.length > 0) {
+        const { data: faltantesData, error: fetchError } = await supabase
           .from("colaboradores")
-          .select("zonas_geocerca")
-          .eq("id", colabId)
-          .maybeSingle();
+          .select("id, zonas_geocerca")
+          .in("id", idsFaltantes);
 
         if (fetchError) {
           throw new Error(
             `Error al leer las zonas del colaborador: ${fetchError.message}`
           );
         }
-
-        const actuales = extraerArregloZonasJson(colabActual?.zonas_geocerca);
-        const yaExiste = actuales.some((item) => item.id === zona.id);
-
-        const nuevasZonas = yaExiste
-          ? actuales.map((item) =>
-              item.id === zona.id ? payloadZona : (item as unknown as Json)
-            )
-          : [...(actuales as unknown as Json[]), payloadZona];
-
-        const { error: updateError } = await supabase
-          .from("colaboradores")
-          .update({ zonas_geocerca: nuevasZonas as unknown as Json })
-          .eq("id", colabId);
-
-        if (updateError) {
-          throw new Error(
-            `No fue posible guardar la zona en Supabase: ${updateError.message}`
-          );
+        for (const fila of faltantesData ?? []) {
+          mapaFilas.set(fila.id, fila.zonas_geocerca);
         }
+      }
+
+      const resultadosUpdate = await Promise.all(
+        idsDestino.map((colabId) => {
+          const actuales = extraerArregloZonasJson(mapaFilas.get(colabId));
+          const yaExiste = actuales.some((item) => item.id === zona.id);
+
+          const nuevasZonas = yaExiste
+            ? actuales.map((item) =>
+                item.id === zona.id ? payloadZona : (item as unknown as Json)
+              )
+            : [...(actuales as unknown as Json[]), payloadZona];
+
+          return supabase
+            .from("colaboradores")
+            .update({ zonas_geocerca: nuevasZonas as unknown as Json })
+            .eq("id", colabId);
+        })
+      );
+
+      const primerError = resultadosUpdate.find((r) => r.error)?.error;
+      if (primerError) {
+        throw new Error(
+          `No fue posible guardar la zona en Supabase: ${primerError.message}`
+        );
       }
     }
 
@@ -394,14 +406,17 @@ export default function ZoneManager({
         ? [zona.colaborador.id]
         : filasColaboradores.map((c) => c.id);
 
-      for (const colabId of idsAfectados) {
-        const { data: colabActual } = await supabase
-          .from("colaboradores")
-          .select("zonas_geocerca")
-          .eq("id", colabId)
-          .maybeSingle();
+      const mapaFilas = new Map(
+        filasColaboradores.map((fila) => [fila.id, fila.zonas_geocerca])
+      );
 
-        const actuales = extraerArregloZonasJson(colabActual?.zonas_geocerca);
+      const actualizacionesPendientes: Array<{
+        colabId: string;
+        filtradas: RawZonaJson[];
+      }> = [];
+
+      for (const colabId of idsAfectados) {
+        const actuales = extraerArregloZonasJson(mapaFilas.get(colabId));
         const filtradas = actuales.filter(
           (item) =>
             item.id !== id &&
@@ -409,11 +424,19 @@ export default function ZoneManager({
         );
 
         if (filtradas.length !== actuales.length) {
-          await supabase
-            .from("colaboradores")
-            .update({ zonas_geocerca: filtradas as unknown as Json })
-            .eq("id", colabId);
+          actualizacionesPendientes.push({ colabId, filtradas });
         }
+      }
+
+      if (actualizacionesPendientes.length > 0) {
+        await Promise.all(
+          actualizacionesPendientes.map(({ colabId, filtradas }) =>
+            supabase
+              .from("colaboradores")
+              .update({ zonas_geocerca: filtradas as unknown as Json })
+              .eq("id", colabId)
+          )
+        );
       }
 
       const restantes = zonas.filter((z) => z.id !== id);

@@ -2,10 +2,12 @@
 
 import type { ComponentType, SVGProps } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { cerrarSesionServerAction } from "@/app/actions/auth";
 import { useAuthRole } from "@/components/auth/AuthRoleContext";
 import { reiniciarEstadoNotificacionesInicio } from "@/components/dashboard/NotificacionesProactivasModal";
 import {
+  CalendarIcon,
   FileTextIcon,
   HomeIcon,
   ClockIcon,
@@ -31,6 +33,7 @@ const NAV_ITEMS_GENERAL: NavItem[] = [
     href: "/dashboard/solicitudes",
     icon: FileTextIcon,
   },
+  { label: "Calendario", href: "/dashboard/calendario", icon: CalendarIcon },
   { label: "Muro Corporativo", href: "/dashboard/muro", icon: NewspaperIcon },
 ];
 
@@ -55,7 +58,6 @@ export default function Sidebar({
   esJefatura?: boolean;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const { rolSistema: rolContexto, esJefatura: esJefaturaContexto } =
     useAuthRole();
 
@@ -70,9 +72,11 @@ export default function Sidebar({
   const handleLogout = async () => {
     reiniciarEstadoNotificacionesInicio(false);
     const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/login");
-    router.refresh();
+    await Promise.allSettled([
+      supabase.auth.signOut(),
+      cerrarSesionServerAction(),
+    ]);
+    window.location.assign("/login");
   };
 
   return (

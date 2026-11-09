@@ -81,6 +81,79 @@ function escaparHtml(texto: string): string {
     .replace(/'/g, "&#39;");
 }
 
+export type SegmentoContenidoMuro =
+  | { tipo: "texto"; valor: string }
+  | { tipo: "enlace"; url: string; texto: string };
+
+function esUrlHttpSegura(candidata: string): boolean {
+  try {
+    const parsed = new URL(candidata);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Divide un texto en segmentos puros de texto y enlaces validados (`http:` / `https:`)
+ * para renderizarlos con nodos nativos de React sin utilizar `dangerouslySetInnerHTML`.
+ */
+export function segmentarContenidoConEnlaces(
+  texto: string | null | undefined
+): SegmentoContenidoMuro[] {
+  if (!texto) return [];
+  const urlRegex = /(https?:\/\/[^\s<>"']+)/gi;
+  const segmentos: SegmentoContenidoMuro[] = [];
+  let ultimoIndice = 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = urlRegex.exec(texto)) !== null) {
+    const inicio = match.index;
+    const coincidencia = match[0];
+
+    if (inicio > ultimoIndice) {
+      segmentos.push({
+        tipo: "texto",
+        valor: texto.slice(ultimoIndice, inicio),
+      });
+    }
+
+    const matchPuntuacion = coincidencia.match(/^(.*?)([.,;:!?)]*)$/);
+    const urlLimpia = matchPuntuacion ? matchPuntuacion[1] : coincidencia;
+    const puntuacionFinal = matchPuntuacion ? matchPuntuacion[2] : "";
+
+    if (urlLimpia && esUrlHttpSegura(urlLimpia)) {
+      segmentos.push({
+        tipo: "enlace",
+        url: urlLimpia,
+        texto: urlLimpia,
+      });
+      if (puntuacionFinal) {
+        segmentos.push({
+          tipo: "texto",
+          valor: puntuacionFinal,
+        });
+      }
+    } else {
+      segmentos.push({
+        tipo: "texto",
+        valor: coincidencia,
+      });
+    }
+
+    ultimoIndice = inicio + coincidencia.length;
+  }
+
+  if (ultimoIndice < texto.length) {
+    segmentos.push({
+      tipo: "texto",
+      valor: texto.slice(ultimoIndice),
+    });
+  }
+
+  return segmentos;
+}
+
 /**
  * Escapa el texto para prevenir XSS y convierte cualquier URL (http:// o https://)
  * en una etiqueta `<a>` segura con `target="_blank"` y `rel="noopener noreferrer"`.
@@ -157,5 +230,45 @@ export function cumpleFiltroAudiencia(
 
   return cumpleEmpresa && cumpleDepartamento;
 }
+
+/**
+ * Extrae de forma segura la lista ordenada de URLs de imágenes de una publicación.
+ * Soporta tanto una URL única en texto plano como un arreglo JSON serializado en `imagen_url`.
+ */
+export function extraerUrlsImagenes(imagenUrl?: string | null): string[] {
+  if (!imagenUrl) return [];
+  const limpio = imagenUrl.trim();
+  if (!limpio) return [];
+
+  if (limpio.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(limpio);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // Si no es JSON válido, tratar como URL simple
+    }
+  }
+
+  return [limpio];
+}
+
+/**
+ * Serializa un arreglo ordenado de URLs de imágenes para almacenarlo en `muro_publicaciones.imagen_url`.
+ * - 0 imágenes -> `null`
+ * - 1 imagen -> cadena directa con la URL (100% compatible con registros existentes)
+ * - 2+ imágenes -> JSON array respetando el orden definido
+ */
+export function serializarUrlsImagenes(urls: string[]): string | null {
+  const limpias = urls.map((u) => u.trim()).filter(Boolean);
+  if (limpias.length === 0) return null;
+  if (limpias.length === 1) return limpias[0];
+  return JSON.stringify(limpias);
+}
+
 
 

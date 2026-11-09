@@ -1,5 +1,6 @@
 "use server";
 
+import { normalizarRolSistema } from "@/lib/auth/session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/supabase";
@@ -51,6 +52,7 @@ export async function obtenerReporteVacacionesAction(filtros?: {
     let solicitudesQuery = supabaseAdmin
       .from("solicitudes")
       .select("*")
+      .in("tipo_solicitud", ["Vacaciones", "Vacaciones Pagadas"])
       .order("fecha_inicio", { ascending: false });
 
     if (filtros?.colaboradorId) {
@@ -69,9 +71,17 @@ export async function obtenerReporteVacacionesAction(filtros?: {
       solicitudesQuery = solicitudesQuery.lte("fecha_inicio", filtros.fechaFin);
     }
 
+    let colaboradoresQuery = supabaseAdmin.from("colaboradores").select("*");
+    if (filtros?.colaboradorId) {
+      const idsConsultar = Array.from(
+        new Set([filtros.colaboradorId, user.id])
+      );
+      colaboradoresQuery = colaboradoresQuery.in("id", idsConsultar);
+    }
+
     const [solicitudesRes, colaboradoresRes] = await Promise.all([
       solicitudesQuery,
-      supabaseAdmin.from("colaboradores").select("*"),
+      colaboradoresQuery,
     ]);
 
     if (solicitudesRes.error) {
@@ -88,8 +98,34 @@ export async function obtenerReporteVacacionesAction(filtros?: {
       };
     }
 
+    const listaColaboradores = colaboradoresRes.data ?? [];
+    let solicitanteColab = listaColaboradores.find((c) => c.id === user.id);
+
+    if (!solicitanteColab && user.email) {
+      const { data: porCorreo } = await supabaseAdmin
+        .from("colaboradores")
+        .select("*")
+        .ilike("correo_corporativo", user.email.trim())
+        .maybeSingle();
+      solicitanteColab = porCorreo ?? undefined;
+    }
+
+    const rolSolicitante = normalizarRolSistema(solicitanteColab?.rol_sistema);
+    const autorizado =
+      rolSolicitante === "Recursos Humanos" ||
+      rolSolicitante === "Jefatura" ||
+      Boolean(solicitanteColab?.es_jefatura);
+
+    if (!autorizado) {
+      return {
+        ok: false,
+        error:
+          "No cuentas con permisos de Recursos Humanos o Jefatura para consultar este reporte.",
+      };
+    }
+
     const mapaColaboradores = new Map<string, ColaboradorRow>(
-      (colaboradoresRes.data ?? []).map((c) => [c.id, c])
+      listaColaboradores.map((c) => [c.id, c])
     );
 
     const solicitudesVacaciones = (solicitudesRes.data ?? []).filter((item) => {

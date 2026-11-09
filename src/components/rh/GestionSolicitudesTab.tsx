@@ -2,6 +2,12 @@
 
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { obtenerFeriadosDinamicosAction } from "@/app/actions/calendario";
+import {
+  actualizarConfigVacacionesNominaAction,
+  obtenerConfigVacacionesNominaAction,
+} from "@/app/actions/configuracionSolicitudes";
+import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
 import { createClient } from "@/lib/supabase/client";
 import type { EstatusSolicitud } from "@/types/solicitudes";
 import type {
@@ -68,6 +74,7 @@ const FORM_INICIAL: VacacionesPagadasForm = {
   fecha_inicio: "",
   fecha_fin: "",
   dias_a_pagar: 5,
+  motivo: "",
 };
 
 const LIMITE_ANUAL_VACACIONES_PAGADAS = 10;
@@ -161,6 +168,11 @@ export default function GestionSolicitudesTab() {
   const [isCreatingVacaciones, setIsCreatingVacaciones] = useState(false);
   const [mensajeCreada, setMensajeCreada] = useState<string | null>(null);
 
+  const [excepcionNominaActiva, setExcepcionNominaActiva] =
+    useState<boolean>(false);
+  const [isTogglingExcepcion, setIsTogglingExcepcion] =
+    useState<boolean>(false);
+
   useEffect(() => {
     let cancelado = false;
 
@@ -171,21 +183,25 @@ export default function GestionSolicitudesTab() {
       try {
         const supabase = createClient();
 
-        const [solicitudesRes, colaboradoresRes] = await Promise.all([
-          supabase
-            .from("solicitudes")
-            .select(
-              "*, colaboradores!colaborador_id(nombre_completo, saldo_vacaciones)"
-            )
-            .in("tipo_solicitud", ["Vacaciones Pagadas", "Incapacidad"])
-            .order("created_at", { ascending: false }),
-          supabase
-            .from("colaboradores")
-            .select("id, nombre_completo, empresa")
-            .order("nombre_completo", { ascending: true }),
-        ]);
+        const [solicitudesRes, colaboradoresRes, configNominaRes] =
+          await Promise.all([
+            supabase
+              .from("solicitudes")
+              .select(
+                "*, colaboradores!colaborador_id(nombre_completo, saldo_vacaciones)"
+              )
+              .in("tipo_solicitud", ["Vacaciones Pagadas", "Incapacidad"])
+              .order("created_at", { ascending: false }),
+            supabase
+              .from("colaboradores")
+              .select("id, nombre_completo, empresa")
+              .order("nombre_completo", { ascending: true }),
+            obtenerConfigVacacionesNominaAction(),
+          ]);
 
         if (cancelado) return;
+
+        setExcepcionNominaActiva(Boolean(configNominaRes?.excepcionActiva));
 
         if (solicitudesRes.error) {
           setErrorMsg(
@@ -292,12 +308,20 @@ export default function GestionSolicitudesTab() {
         }
       }
 
-      // Si se aprueba ('Completado') y es de tipo 'Vacaciones', descontar días del saldo_vacaciones
+      // Si se aprueba ('Completado') y es de tipo 'Vacaciones', descontar días efectivos (sin feriados oficiales ni de empresa) del saldo_vacaciones
       if (newStatus === "Completado" && esVacaciones) {
-        const diasSolicitados = calcularDiasSolicitados(
-          solicitud.fecha_inicio,
-          solicitud.fecha_fin
+        const feriadosDinamicos = await obtenerFeriadosDinamicosAction();
+        const colabCatalogo = colaboradores.find(
+          (c) => c.id === solicitud.colaborador_id
         );
+        const empresaColab = (colabCatalogo?.empresa ?? "AIF").trim() || "AIF";
+        const { diasEfectivos: diasSolicitados } =
+          calcularDiasEfectivosSinFeriados(
+            solicitud.fecha_inicio,
+            solicitud.fecha_fin,
+            Array.isArray(feriadosDinamicos) ? feriadosDinamicos : [],
+            empresaColab
+          );
         const saldoActual = obtenerSaldoColaborador(solicitud.colaboradores);
 
         if (diasSolicitados > saldoActual) {
@@ -449,7 +473,7 @@ export default function GestionSolicitudesTab() {
       }
     }
 
-    const motivoTexto =
+    const motivoPorDefecto =
       tipoElegido === "Incapacidad"
         ? `Asignación directa de incapacidad (${dias} ${
             dias === 1 ? "día" : "días"
@@ -457,6 +481,9 @@ export default function GestionSolicitudesTab() {
         : `Solicitud directa de vacaciones pagadas (${dias} ${
             dias === 1 ? "día" : "días"
           })`;
+
+    const comentarioLimpio = (form.motivo ?? "").trim();
+    const motivoTexto = comentarioLimpio || motivoPorDefecto;
 
     setIsCreatingVacaciones(true);
     setErrorMsg(null);
@@ -471,6 +498,7 @@ export default function GestionSolicitudesTab() {
           tipo_solicitud: tipoElegido,
           fecha_inicio: form.fecha_inicio,
           fecha_fin: form.fecha_fin || form.fecha_inicio,
+          dias_solicitados: Math.max(1, dias),
           motivo: motivoTexto,
           estatus: "Completado",
         })
@@ -718,17 +746,89 @@ export default function GestionSolicitudesTab() {
         </div>
       </section>
 
-      {/* Bloque Derecho: Asignar vacaciones / incapacidad (Formulario exclusivo RH) */}
-      <aside className="rounded-sm border-t-4 border-brand-dark bg-brand-surface p-6 shadow-sm lg:col-span-4">
-        <header className="mb-5">
-          <h2 className="font-serif text-base font-bold text-brand-gold">
-            Asignar vacaciones
-          </h2>
-          <p className="mt-1 text-xs leading-relaxed text-gray-500">
-            Asignar de forma directa vacaciones pagadas o incapacidad para un
-            colaborador.
+      {/* Bloque Derecho: Interruptor de Excepción en Semana de Nómina + Asignar vacaciones / incapacidad */}
+      <aside className="flex flex-col gap-5 lg:col-span-4">
+        {/* Tarjeta del Interruptor Extraordinario de RH para Semana de Nómina */}
+        <div className="rounded-sm border-t-4 border-brand-gold bg-brand-surface p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <span className="text-[8px] font-bold uppercase tracking-widest text-brand-gold">
+                CONTROL DE LÍMITES RH · CIERRE DE NÓMINA (15 Y 30)
+              </span>
+              <h3 className="mt-0.5 font-serif text-sm font-bold text-gray-900">
+                Solicitudes en Semana de Nómina
+              </h3>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={excepcionNominaActiva}
+              disabled={isTogglingExcepcion}
+              onClick={async () => {
+                if (isTogglingExcepcion) return;
+                const nuevoValor = !excepcionNominaActiva;
+                setIsTogglingExcepcion(true);
+                setExcepcionNominaActiva(nuevoValor);
+                const res =
+                  await actualizarConfigVacacionesNominaAction(nuevoValor);
+                if (!res.ok) {
+                  setExcepcionNominaActiva(!nuevoValor);
+                  setErrorMsg(
+                    res.error || "No se pudo actualizar el interruptor."
+                  );
+                } else {
+                  setExcepcionNominaActiva(res.config.excepcionActiva);
+                }
+                setIsTogglingExcepcion(false);
+              }}
+              aria-label="Habilitar solicitudes de vacaciones en semana de nómina"
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none disabled:cursor-wait disabled:opacity-60 ${
+                excepcionNominaActiva ? "bg-status-success" : "bg-gray-300"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                  excepcionNominaActiva ? "translate-x-5" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </div>
+
+          <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
+            Del <strong>9 al 15</strong> y del <strong>23 al 30</strong> del
+            mismo mes no es posible solicitar vacaciones por corte de nómina.
+            Activa este interruptor para habilitar solicitudes en casos
+            extraordinarios.
           </p>
-        </header>
+
+          <div className="mt-3 flex items-center justify-between border-t border-gray-100 pt-2.5">
+            <span className="text-[8px] font-bold uppercase tracking-wider text-gray-500">
+              ESTADO ACTUAL
+            </span>
+            <span
+              className={`rounded-sm border px-2 py-0.5 text-[8px] font-extrabold uppercase tracking-wider ${
+                excepcionNominaActiva
+                  ? "border-status-success/40 bg-status-success/10 text-status-success-dark"
+                  : "border-gray-300 bg-brand-beige/40 text-gray-700"
+              }`}
+            >
+              {excepcionNominaActiva
+                ? "EXCEPCIÓN ACTIVA (SOLICITUDES HABILITADAS)"
+                : "RESTRICCIÓN ACTIVA (9-15 Y 23-30 BLOQUEADOS)"}
+            </span>
+          </div>
+        </div>
+
+        <div className="rounded-sm border-t-4 border-brand-dark bg-brand-surface p-6 shadow-sm">
+          <header className="mb-5">
+            <h2 className="font-serif text-base font-bold text-brand-gold">
+              Asignar vacaciones
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-gray-500">
+              Asignar de forma directa vacaciones pagadas o incapacidad para un
+              colaborador.
+            </p>
+          </header>
 
         <form onSubmit={handleCrearVacaciones} className="flex flex-col gap-4">
           <div>
@@ -847,6 +947,26 @@ export default function GestionSolicitudesTab() {
             />
           </div>
 
+          <div>
+            <label htmlFor="rh-vac-motivo" className={LABEL}>
+              COMENTARIO / RAZÓN DE ASIGNACIÓN
+            </label>
+            <textarea
+              id="rh-vac-motivo"
+              rows={3}
+              placeholder="Ingresa la razón o comentario de esta asignación..."
+              value={form.motivo ?? ""}
+              onChange={(e) => {
+                setForm((prev) => ({
+                  ...prev,
+                  motivo: e.target.value,
+                }));
+                setMensajeCreada(null);
+              }}
+              className="w-full resize-y rounded-sm border border-gray-300 bg-brand-surface px-3 py-2 text-xs font-medium leading-relaxed text-gray-900 placeholder:text-gray-400 focus:border-brand-dark focus:outline-none"
+            />
+          </div>
+
           <button
             type="submit"
             disabled={isCreatingVacaciones}
@@ -861,6 +981,7 @@ export default function GestionSolicitudesTab() {
             </p>
           )}
         </form>
+        </div>
       </aside>
     </div>
   );

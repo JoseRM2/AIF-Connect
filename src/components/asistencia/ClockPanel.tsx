@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangleIcon,
@@ -225,6 +225,8 @@ export default function ClockPanel({
   );
   const [modalSalidaAnticipada, setModalSalidaAnticipada] =
     useState<boolean>(false);
+  const enProcesoRef = useRef<boolean>(false);
+  const fechaInicialSsrRef = useRef<string>(fechaHoyLocal);
 
   // Sincronizar cambios provenientes de SSR tras router.refresh()
   useEffect(() => {
@@ -267,8 +269,12 @@ export default function ClockPanel({
     return () => clearInterval(timer);
   }, []);
 
-  // Verificar asistencia de HOY y sincronizar `zonas_geocerca` del colaborador desde Supabase
+  // Verificar asistencia de HOY y sincronizar `zonas_geocerca` cuando cambia de día (medianoche) o no vino de SSR
   useEffect(() => {
+    if (userId && fechaHoyLocal === fechaInicialSsrRef.current) {
+      return;
+    }
+
     let activo = true;
 
     async function verificarAsistenciaYZonasDeHoy() {
@@ -482,7 +488,8 @@ export default function ClockPanel({
    * Flujo de Check-in (Marcar Entrada)
    */
   const handleCheckIn = async () => {
-    if (isLoading || isLocating || tieneEntrada) return;
+    if (enProcesoRef.current || isLoading || isLocating || tieneEntrada) return;
+    enProcesoRef.current = true;
 
     setIsLoading(true);
     setStatus("locating");
@@ -564,6 +571,7 @@ export default function ClockPanel({
           : "Ocurrió un error al acceder al GPS del navegador."
       );
     } finally {
+      enProcesoRef.current = false;
       setIsLocating(false);
       setIsLoading(false);
     }
@@ -573,7 +581,14 @@ export default function ClockPanel({
    * Flujo de Inicio de Descanso (Iniciar Descanso) con validación de GPS y geocerca.
    */
   const handleIniciarDescanso = async () => {
-    if (isLoading || isLocating || !puedeIniciarDescanso) return;
+    if (
+      enProcesoRef.current ||
+      isLoading ||
+      isLocating ||
+      !puedeIniciarDescanso
+    )
+      return;
+    enProcesoRef.current = true;
 
     setIsLoading(true);
     setStatus("locating");
@@ -644,6 +659,7 @@ export default function ClockPanel({
           : "Ocurrió un error al acceder al GPS del navegador."
       );
     } finally {
+      enProcesoRef.current = false;
       setIsLocating(false);
       setIsLoading(false);
     }
@@ -653,7 +669,8 @@ export default function ClockPanel({
    * Flujo de Fin de Descanso (Regresar a Actividades) con validación de GPS y geocerca.
    */
   const handleFinalizarDescanso = async () => {
-    if (isLoading || isLocating || !enDescanso) return;
+    if (enProcesoRef.current || isLoading || isLocating || !enDescanso) return;
+    enProcesoRef.current = true;
 
     setIsLoading(true);
     setStatus("locating");
@@ -724,6 +741,7 @@ export default function ClockPanel({
           : "Ocurrió un error al acceder al GPS del navegador."
       );
     } finally {
+      enProcesoRef.current = false;
       setIsLocating(false);
       setIsLoading(false);
     }
@@ -733,6 +751,8 @@ export default function ClockPanel({
    * Ejecuta el registro de salida (Check-out) tras validar GPS y geocerca.
    */
   const ejecutarCheckOut = async () => {
+    if (enProcesoRef.current) return;
+    enProcesoRef.current = true;
     setModalSalidaAnticipada(false);
     setIsLoading(true);
     setStatus("locating");
@@ -804,6 +824,7 @@ export default function ClockPanel({
           : "Ocurrió un error al acceder al GPS del navegador."
       );
     } finally {
+      enProcesoRef.current = false;
       setIsLocating(false);
       setIsLoading(false);
     }

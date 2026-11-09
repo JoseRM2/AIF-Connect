@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import Link from "next/link";
 import {
   obtenerNotificacionesPendientesAction,
@@ -201,14 +201,16 @@ export default function NotificacionesProactivasModal({
     }
   }, [userId]);
 
-  // Consultas a servidor y respaldo cliente para obtener todas las notificaciones pendientes
+  // Consultas a servidor y respaldo cliente cuando no se recibieron notificaciones iniciales por SSR
   useEffect(() => {
+    if (tieneIniciales) {
+      return;
+    }
+
     let cancelado = false;
 
     async function cargarNotificacionesPendientes() {
-      if (!tieneIniciales) {
-        setCargando(true);
-      }
+      setCargando(true);
 
       try {
         // 1. Vía principal: Server Action (resuelve perfil real, evita errores de ENUM 22P02 y bloqueos RLS)
@@ -373,7 +375,7 @@ export default function NotificacionesProactivasModal({
     };
   }, [esRecursosHumanos, tieneIniciales, tieneJefatura, userId]);
 
-  const handleCerrarPorBoton = () => {
+  const handleCerrarPorBoton = useCallback(() => {
     cerradoPorBotonEnSesion = true;
     if (typeof window !== "undefined") {
       try {
@@ -386,7 +388,7 @@ export default function NotificacionesProactivasModal({
     }
     setCerradoPorUsuario(true);
     setAbiertoDesdeTarjeta(false);
-  };
+  }, [userId]);
 
   const handleAbrirDesdeTarjeta = () => {
     cerradoPorBotonEnSesion = false;
@@ -419,7 +421,7 @@ export default function NotificacionesProactivasModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  });
+  }, [mostrarOverlay, handleCerrarPorBoton]);
 
   const renderIconoCategoria = (
     categoria: NotificacionPendienteItem["categoria"]

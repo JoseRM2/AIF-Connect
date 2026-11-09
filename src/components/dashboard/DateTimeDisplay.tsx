@@ -22,7 +22,17 @@ export default function DateTimeDisplay() {
     setNow(new Date());
 
     const intervalId = setInterval(() => {
-      setNow(new Date());
+      setNow((prev) => {
+        const current = new Date();
+        if (
+          prev.getMinutes() === current.getMinutes() &&
+          prev.getHours() === current.getHours() &&
+          prev.getDate() === current.getDate()
+        ) {
+          return prev;
+        }
+        return current;
+      });
     }, 1000);
 
     return () => {

@@ -1,9 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { TIPO_SOLICITUD_LABELS, TIPOS_SOLICITUD } from "@/lib/solicitudes";
+import { obtenerFeriadosDinamicosAction } from "@/app/actions/calendario";
+import { obtenerConfigVacacionesNominaAction } from "@/app/actions/configuracionSolicitudes";
+import {
+  calcularDiasEfectivosSinFeriados,
+  type FeriadoEmpresaItem,
+} from "@/lib/calendario";
+import {
+  TIPO_SOLICITUD_LABELS,
+  TIPOS_SOLICITUD,
+  validarRestriccionSemanaNomina,
+} from "@/lib/solicitudes";
 import { createClient } from "@/lib/supabase/client";
 import type { SolicitudFormData } from "@/types/solicitudes";
 
@@ -12,6 +22,8 @@ interface RequestFormProps {
   saldoVacaciones?: number;
   /** Días de vacaciones ya comprometidos en solicitudes pendientes de autorización. */
   diasVacacionesPendientes?: number;
+  /** Interruptor controlado por RH para permitir vacaciones en semanas de nómina (9-15 y 23-30 del mismo mes). */
+  excepcionVacacionesNominaActiva?: boolean;
   userId?: string;
   onSubmit?: (data: SolicitudFormData) => void;
 }
@@ -89,21 +101,30 @@ interface SolicitudPrevRow {
 export default function RequestForm({
   saldoVacaciones = 0,
   diasVacacionesPendientes = 0,
+  excepcionVacacionesNominaActiva = false,
   userId,
   onSubmit,
 }: RequestFormProps) {
   const router = useRouter();
   const [form, setForm] = useState<SolicitudFormData>(INITIAL_STATE);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const enProcesoRef = useRef(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saldoTotalActual, setSaldoTotalActual] =
     useState<number>(saldoVacaciones);
   const [diasPendientesActual, setDiasPendientesActual] = useState<number>(
     diasVacacionesPendientes
   );
+  const [excepcionNominaActiva, setExcepcionNominaActiva] = useState<boolean>(
+    excepcionVacacionesNominaActiva
+  );
   const [solicitudesPrevias, setSolicitudesPrevias] = useState<
     SolicitudPrevRow[]
   >([]);
+  const [feriadosDinamicos, setFeriadosDinamicos] = useState<
+    FeriadoEmpresaItem[]
+  >([]);
+  const [empresaColaborador, setEmpresaColaborador] = useState<string>("AIF");
 
   useEffect(() => {
     setSaldoTotalActual(saldoVacaciones);
@@ -112,6 +133,10 @@ export default function RequestForm({
   useEffect(() => {
     setDiasPendientesActual(diasVacacionesPendientes);
   }, [diasVacacionesPendientes]);
+
+  useEffect(() => {
+    setExcepcionNominaActiva(excepcionVacacionesNominaActiva);
+  }, [excepcionVacacionesNominaActiva]);
 
   // Sincronizar en tiempo real el saldo y las solicitudes de vacaciones / vacaciones pagadas al abrir el formulario
   useEffect(() => {
@@ -128,10 +153,10 @@ export default function RequestForm({
         }
         if (!targetUserId || cancelado) return;
 
-        const [colabRes, solRes] = await Promise.all([
+        const [colabRes, solRes, cfgNomina, feriadosRes] = await Promise.all([
           supabase
             .from("colaboradores")
-            .select("saldo_vacaciones")
+            .select("saldo_vacaciones, empresa")
             .eq("id", targetUserId)
             .maybeSingle(),
           supabase
@@ -139,9 +164,18 @@ export default function RequestForm({
             .select("tipo_solicitud, fecha_inicio, fecha_fin, estatus")
             .eq("colaborador_id", targetUserId)
             .in("tipo_solicitud", ["Vacaciones", "Vacaciones Pagadas"]),
+          obtenerConfigVacacionesNominaAction(),
+          obtenerFeriadosDinamicosAction(),
         ]);
 
         if (cancelado) return;
+
+        setExcepcionNominaActiva(Boolean(cfgNomina?.excepcionActiva));
+        const listaFeriados = Array.isArray(feriadosRes) ? feriadosRes : [];
+        setFeriadosDinamicos(listaFeriados);
+
+        const empActual = colabRes.data?.empresa?.trim() || "AIF";
+        setEmpresaColaborador(empActual);
 
         if (!colabRes.error && colabRes.data) {
           setSaldoTotalActual(Number(colabRes.data.saldo_vacaciones ?? 0));
@@ -157,7 +191,12 @@ export default function RequestForm({
             ) {
               return (
                 acum +
-                calcularDiasSolicitados(fila.fecha_inicio, fila.fecha_fin)
+                calcularDiasEfectivosSinFeriados(
+                  fila.fecha_inicio,
+                  fila.fecha_fin,
+                  listaFeriados,
+                  empActual
+                ).diasEfectivos
               );
             }
             return acum;
@@ -209,10 +248,41 @@ export default function RequestForm({
     [diasVacacionesPagadasUsadosAnio]
   );
 
-  const diasSolicitados = useMemo(
-    () => calcularDiasSolicitados(form.fecha_inicio, form.fecha_fin),
-    [form.fecha_inicio, form.fecha_fin]
+  const calculoRangoActual = useMemo(
+    () =>
+      calcularDiasEfectivosSinFeriados(
+        form.fecha_inicio,
+        form.fecha_fin,
+        feriadosDinamicos,
+        empresaColaborador
+      ),
+    [form.fecha_inicio, form.fecha_fin, feriadosDinamicos, empresaColaborador]
   );
+
+  const diasSolicitados = useMemo(
+    () =>
+      form.tipo === "vacaciones"
+        ? calculoRangoActual.diasEfectivos
+        : calcularDiasSolicitados(form.fecha_inicio, form.fecha_fin),
+    [form.tipo, calculoRangoActual.diasEfectivos, form.fecha_inicio, form.fecha_fin]
+  );
+
+  const esSolicitudVacaciones =
+    form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas";
+
+  const errorSemanaNomina = useMemo(() => {
+    if (!esSolicitudVacaciones) return null;
+    return validarRestriccionSemanaNomina(
+      form.fecha_inicio,
+      form.fecha_fin,
+      excepcionNominaActiva
+    );
+  }, [
+    esSolicitudVacaciones,
+    form.fecha_inicio,
+    form.fecha_fin,
+    excepcionNominaActiva,
+  ]);
 
   const handleChange = (
     e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
@@ -224,7 +294,7 @@ export default function RequestForm({
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (isSubmitting || enProcesoRef.current) return;
     setErrorMsg(null);
 
     if (!form.fecha_inicio || !form.fecha_fin) {
@@ -236,6 +306,12 @@ export default function RequestForm({
       setErrorMsg(
         "La fecha de fin debe ser igual o posterior a la fecha de inicio."
       );
+      return;
+    }
+
+    // Regla de negocio: Límite de semana de nómina (del 9 al 15 y del 23 al 30 del mismo mes)
+    if (esSolicitudVacaciones && errorSemanaNomina) {
+      setErrorMsg(errorSemanaNomina);
       return;
     }
 
@@ -276,6 +352,7 @@ export default function RequestForm({
       return;
     }
 
+    enProcesoRef.current = true;
     setIsSubmitting(true);
 
     try {
@@ -295,7 +372,7 @@ export default function RequestForm({
 
       // Verificación estricta contra base de datos antes de insertar para evitar saltar límites
       if (form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas") {
-        const [colabRes, solRes] = await Promise.all([
+        const [colabRes, solRes, cfgNominaActual] = await Promise.all([
           supabase
             .from("colaboradores")
             .select("saldo_vacaciones")
@@ -306,7 +383,21 @@ export default function RequestForm({
             .select("tipo_solicitud, fecha_inicio, fecha_fin, estatus")
             .eq("colaborador_id", targetUserId)
             .in("tipo_solicitud", ["Vacaciones", "Vacaciones Pagadas"]),
+          obtenerConfigVacacionesNominaAction(),
         ]);
+
+        const excepcionBD = Boolean(cfgNominaActual?.excepcionActiva);
+        setExcepcionNominaActiva(excepcionBD);
+
+        const bloqueoNominaBD = validarRestriccionSemanaNomina(
+          form.fecha_inicio,
+          form.fecha_fin,
+          excepcionBD
+        );
+        if (bloqueoNominaBD) {
+          setErrorMsg(bloqueoNominaBD);
+          return;
+        }
 
         const filasBD = solRes.data ?? [];
         setSolicitudesPrevias(filasBD);
@@ -323,7 +414,12 @@ export default function RequestForm({
             ) {
               return (
                 acum +
-                calcularDiasSolicitados(fila.fecha_inicio, fila.fecha_fin)
+                calcularDiasEfectivosSinFeriados(
+                  fila.fecha_inicio,
+                  fila.fecha_fin,
+                  feriadosDinamicos,
+                  empresaColaborador
+                ).diasEfectivos
               );
             }
             return acum;
@@ -382,6 +478,7 @@ export default function RequestForm({
         tipo_solicitud: tipoSolicitudLabel,
         fecha_inicio: form.fecha_inicio,
         fecha_fin: form.fecha_fin,
+        dias_solicitados: Math.max(1, diasSolicitados),
         motivo: form.motivo.trim() || null,
         estatus: estatusInicial,
       });
@@ -417,6 +514,7 @@ export default function RequestForm({
           : "Ocurrió un error al enviar la solicitud."
       );
     } finally {
+      enProcesoRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -464,6 +562,24 @@ export default function RequestForm({
           )}
         </div>
       </div>
+
+      {form.tipo === "vacaciones" &&
+        calculoRangoActual.feriadosEnRango.length > 0 && (
+          <div className="rounded-sm border border-status-info/40 bg-status-info/10 px-4 py-2.5 text-xs font-medium text-status-info-dark">
+            ✓ El rango seleccionado incluye{" "}
+            <strong>
+              {calculoRangoActual.feriadosEnRango.length}{" "}
+              {calculoRangoActual.feriadosEnRango.length === 1
+                ? "día feriado"
+                : "días feriados"}
+            </strong>{" "}
+            (
+            {calculoRangoActual.feriadosEnRango
+              .map((f) => `${f.titulo} [${f.fecha}]`)
+              .join(", ")}
+            ), los cuales <strong>no se descuentan</strong> de tu saldo de vacaciones.
+          </div>
+        )}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <div>
@@ -533,6 +649,31 @@ export default function RequestForm({
           className={`${FIELD} h-28 resize-y p-3 text-gray-800 placeholder-gray-400`}
         />
       </div>
+
+      {esSolicitudVacaciones && (
+        <div
+          className={`flex flex-wrap items-center justify-between gap-2 rounded-sm border px-3.5 py-2 text-[10px] font-semibold ${
+            excepcionNominaActiva
+              ? "border-status-success/40 bg-status-success/10 text-status-success-dark"
+              : "border-brand-gold/40 bg-brand-beige/40 text-gray-800"
+          }`}
+        >
+          <span>
+            {excepcionNominaActiva
+              ? "✓ Excepción extraordinaria de RH activa: Se permiten solicitudes de vacaciones durante semana de nómina."
+              : "Regla de nómina: Del 9 al 15 y del 23 al 30 del mismo mes en curso no es posible solicitar vacaciones (cierres de nómina días 15 y 30)."}
+          </span>
+        </div>
+      )}
+
+      {errorSemanaNomina && !errorMsg && (
+        <p
+          role="alert"
+          className="rounded-sm border border-status-danger/30 bg-status-danger/10 px-3.5 py-2.5 text-xs font-semibold text-status-danger"
+        >
+          {errorSemanaNomina}
+        </p>
+      )}
 
       {errorMsg && (
         <p

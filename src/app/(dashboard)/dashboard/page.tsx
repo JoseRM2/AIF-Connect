@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { obtenerCelebracionesPrivadasHoyAction } from "@/app/actions/calendario";
 import { obtenerNotificacionesPendientesAction } from "@/app/actions/notificaciones";
 import DateTimeDisplay from "@/components/dashboard/DateTimeDisplay";
+import GreetingOverlayModal from "@/components/dashboard/GreetingOverlayModal";
 import NotificacionesProactivasModal from "@/components/dashboard/NotificacionesProactivasModal";
 import UltimasPublicaciones from "@/components/dashboard/UltimasPublicaciones";
 import {
@@ -24,16 +26,21 @@ export default async function DashboardHome() {
     redirect("/login");
   }
 
-  const [{ data: colaborador }, perfilSesion, notificacionesRes] =
-    await Promise.all([
-      supabase
-        .from("colaboradores")
-        .select("*")
-        .eq("id", user.id)
-        .maybeSingle(),
-      obtenerSesionYRol(),
-      obtenerNotificacionesPendientesAction(),
-    ]);
+  const [
+    { data: colaborador },
+    perfilSesion,
+    notificacionesRes,
+    celebracionesPrivadasHoy,
+  ] = await Promise.all([
+    supabase
+      .from("colaboradores")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle(),
+    obtenerSesionYRol(),
+    obtenerNotificacionesPendientesAction(),
+    obtenerCelebracionesPrivadasHoyAction(),
+  ]);
 
   const nombreCompleto =
     `${colaborador?.nombre ?? ""} ${colaborador?.apellidos ?? ""}`.trim() ||
@@ -61,6 +68,11 @@ export default async function DashboardHome() {
 
   return (
     <div className="flex min-h-full flex-col px-12 py-8">
+      <GreetingOverlayModal
+        userId={user.id}
+        celebracionesIniciales={celebracionesPrivadasHoy}
+      />
+
       {/* Top bar */}
       <div className="mb-10 flex items-center justify-end gap-4">
         <span className="text-[10px] font-bold uppercase tracking-widest text-gray-600">

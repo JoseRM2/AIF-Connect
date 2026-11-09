@@ -46,6 +46,7 @@ export interface VacacionesPagadasForm {
   fecha_inicio: string;
   fecha_fin: string;
   dias_a_pagar: number;
+  motivo?: string;
 }
 
 /**

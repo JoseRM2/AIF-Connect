@@ -8,7 +8,10 @@ import { AlertTriangleIcon, DownloadIcon } from "@/components/ui/icons";
 import { evaluarIndicadoresVisualesAsistencia } from "@/lib/asistencia";
 import { obtenerUrlPublicaExpediente } from "@/lib/storage/expedientes";
 import { createClient } from "@/lib/supabase/client";
+import type { Database } from "@/types/supabase";
 import type { Empleado } from "@/types/rh";
+
+type ColaboradorRow = Database["public"]["Tables"]["colaboradores"]["Row"];
 
 export type TipoReporteRH = "Empleados" | "Asistencia" | "Vacaciones";
 export type FiltroEmpresaReporte = "Todas" | "AIF" | "ROYAL";
@@ -155,6 +158,7 @@ interface ColaboradorFiltroOption {
   empresa: string;
   comprobanteEstudiosUrl: string | null;
   cartaRecomendacionUrl: string | null;
+  tieneDocumentosExpediente?: boolean;
 }
 
 function construirNombreCompletoReporte(colaborador: {
@@ -180,8 +184,10 @@ function extraerColaboradorJoin(raw: unknown): ColaboradorJoin {
 
 export default function ReporteEmpleados({
   empleados = [],
+  colaboradoresRows,
 }: {
   empleados?: Empleado[];
+  colaboradoresRows?: ColaboradorRow[];
 }) {
   const rangoInicial = obtenerRangoMesActual();
 
@@ -196,6 +202,9 @@ export default function ReporteEmpleados({
   const [catalogoColaboradores, setCatalogoColaboradores] = useState<
     ColaboradorFiltroOption[]
   >([]);
+  const [idsConDocumentos, setIdsConDocumentos] = useState<Set<string>>(
+    () => new Set()
+  );
   const [visorColaboradorActivo, setVisorColaboradorActivo] =
     useState<ColaboradorFiltroOption | null>(null);
 
@@ -213,41 +222,88 @@ export default function ReporteEmpleados({
   const requiereRangoFechas =
     tipoReporte === "Asistencia" || tipoReporte === "Vacaciones";
 
-  // Cargar catálogo dinámico de colaboradores y áreas/departamentos desde Supabase
+  // Cargar una sola vez al montar los documentos existentes en `expedientes_documentos`
+  // y (solo si el padre no provee `colaboradoresRows`) el catálogo de colaboradores
   useEffect(() => {
     let activo = true;
     async function cargarCatalogoFiltros() {
       try {
         const supabase = createClient();
-        const { data } = await supabase
-          .from("colaboradores")
-          .select("*")
-          .order("nombre_completo", { ascending: true });
+        const tieneRowsPadre = Array.isArray(colaboradoresRows);
+        const [colabRes, { data: docsData }] = await Promise.all([
+          tieneRowsPadre
+            ? Promise.resolve({ data: null })
+            : supabase
+                .from("colaboradores")
+                .select(
+                  "id, nombre, apellidos, nombre_completo, departamento, empresa, comprobante_estudios_url, carta_recomendacion_url"
+                )
+                .order("nombre_completo", { ascending: true }),
+          supabase
+            .from("expedientes_documentos")
+            .select("colaborador_id, archivo_url"),
+        ]);
 
-        if (!activo || !data) return;
+        if (!activo) return;
 
-        const opciones: ColaboradorFiltroOption[] = data.map((c) => ({
-          id: c.id,
-          nombreCompleto: construirNombreCompletoReporte(c),
-          departamento: (c.departamento ?? "General").trim() || "General",
-          empresa: (c.empresa ?? "AIF").trim().toUpperCase(),
-          comprobanteEstudiosUrl: c.comprobante_estudios_url ?? null,
-          cartaRecomendacionUrl: c.carta_recomendacion_url ?? null,
-        }));
+        const conDocsSet = new Set<string>();
+        for (const d of docsData ?? []) {
+          if (d.colaborador_id && (d.archivo_url ?? "").trim()) {
+            conDocsSet.add(d.colaborador_id);
+          }
+        }
+        setIdsConDocumentos(conDocsSet);
 
-        opciones.sort((a, b) =>
-          a.nombreCompleto.localeCompare(b.nombreCompleto, "es")
-        );
-        setCatalogoColaboradores(opciones);
+        if (colabRes.data) {
+          const opciones: ColaboradorFiltroOption[] = colabRes.data.map((c) => ({
+            id: c.id,
+            nombreCompleto: construirNombreCompletoReporte(c),
+            departamento: (c.departamento ?? "General").trim() || "General",
+            empresa: (c.empresa ?? "AIF").trim().toUpperCase(),
+            comprobanteEstudiosUrl: c.comprobante_estudios_url ?? null,
+            cartaRecomendacionUrl: c.carta_recomendacion_url ?? null,
+            tieneDocumentosExpediente:
+              conDocsSet.has(c.id) ||
+              Boolean(c.comprobante_estudios_url) ||
+              Boolean(c.carta_recomendacion_url),
+          }));
+
+          opciones.sort((a, b) =>
+            a.nombreCompleto.localeCompare(b.nombreCompleto, "es")
+          );
+          setCatalogoColaboradores(opciones);
+        }
       } catch {
-        // Fallback silencioso a la prop `empleados`
+        // Fallback silencioso a la prop `empleados` / `colaboradoresRows`
       }
     }
     cargarCatalogoFiltros();
     return () => {
       activo = false;
     };
-  }, [empleados]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Si el padre (`DirectorioTab`) provee `colaboradoresRows`, sincronizar en memoria sin re-consultar Supabase
+  useEffect(() => {
+    if (!colaboradoresRows || colaboradoresRows.length === 0) return;
+    const opciones: ColaboradorFiltroOption[] = colaboradoresRows.map((c) => ({
+      id: c.id,
+      nombreCompleto: construirNombreCompletoReporte(c),
+      departamento: (c.departamento ?? "General").trim() || "General",
+      empresa: (c.empresa ?? "AIF").trim().toUpperCase(),
+      comprobanteEstudiosUrl: c.comprobante_estudios_url ?? null,
+      cartaRecomendacionUrl: c.carta_recomendacion_url ?? null,
+      tieneDocumentosExpediente:
+        idsConDocumentos.has(c.id) ||
+        Boolean(c.comprobante_estudios_url) ||
+        Boolean(c.carta_recomendacion_url),
+    }));
+    opciones.sort((a, b) =>
+      a.nombreCompleto.localeCompare(b.nombreCompleto, "es")
+    );
+    setCatalogoColaboradores(opciones);
+  }, [colaboradoresRows, idsConDocumentos]);
 
   // Cerrar el Combobox de Colaborador Específico al hacer clic fuera
   useEffect(() => {
@@ -633,7 +689,10 @@ export default function ReporteEmpleados({
         };
         const rawItem = item as Record<string, unknown>;
         const diasCalculados =
-          typeof rawItem.dias === "number" && rawItem.dias > 0
+          typeof rawItem.dias_solicitados === "number" &&
+          rawItem.dias_solicitados > 0
+            ? rawItem.dias_solicitados
+            : typeof rawItem.dias === "number" && rawItem.dias > 0
             ? rawItem.dias
             : calcularDiasEntreFechas(item.fecha_inicio, item.fecha_fin);
 
@@ -1233,7 +1292,9 @@ export default function ReporteEmpleados({
                       ""
                   ).trim();
                   const tieneAlgunDocumento = Boolean(
-                    urlCompFila || urlCartaFila
+                    urlCompFila ||
+                      urlCartaFila ||
+                      colabInfo?.tieneDocumentosExpediente
                   );
 
                   const esReporteAsistencia = tipoPreview === "Asistencia";
@@ -1412,6 +1473,7 @@ export default function ReporteEmpleados({
 
       {visorColaboradorActivo && (
         <VisorDocumentoExpedienteModal
+          colaboradorId={visorColaboradorActivo.id}
           nombreColaborador={visorColaboradorActivo.nombreCompleto}
           comprobanteEstudiosUrl={
             visorColaboradorActivo.comprobanteEstudiosUrl

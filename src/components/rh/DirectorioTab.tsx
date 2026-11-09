@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { sincronizarEstatusAccesoColaboradorAction } from "@/app/actions/colaboradores";
 import ExpedienteColaboradorModal from "@/components/rh/ExpedienteColaboradorModal";
 import ReporteEmpleados from "@/components/rh/ReporteEmpleados";
 import VisorDocumentoExpedienteModal from "@/components/rh/VisorDocumentoExpedienteModal";
@@ -225,6 +226,13 @@ export default function DirectorioTab() {
         return;
       }
 
+      // Revocar inmediatamente el acceso en auth.users y registrar en bitácora de auditoría
+      await sincronizarEstatusAccesoColaboradorAction({
+        colaboradorId: colaboradorBaja.id,
+        nuevoEstatus: "Inactivo",
+        motivoBaja: motivoLimpio,
+      });
+
       const nombreColab = obtenerNombreCompleto(colaboradorBaja);
       setColaboradores((prev) =>
         prev.map((c) =>
@@ -331,7 +339,10 @@ export default function DirectorioTab() {
 
   return (
     <div className="flex flex-col gap-6">
-      <ReporteEmpleados empleados={empleadosReporte} />
+      <ReporteEmpleados
+        empleados={empleadosReporte}
+        colaboradoresRows={colaboradores}
+      />
 
       <section className="overflow-hidden rounded-sm bg-brand-surface shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4 bg-brand-beige/30 px-6 py-4">
@@ -570,6 +581,7 @@ export default function DirectorioTab() {
 
       {colaboradorVisorDocs && (
         <VisorDocumentoExpedienteModal
+          colaboradorId={colaboradorVisorDocs.id}
           nombreColaborador={obtenerNombreCompleto(colaboradorVisorDocs)}
           comprobanteEstudiosUrl={
             colaboradorVisorDocs.comprobante_estudios_url

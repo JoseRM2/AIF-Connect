@@ -1,6 +1,16 @@
 "use server";
 
 import { randomInt } from "node:crypto";
+import {
+  esCuentaColaboradorActiva,
+  normalizarRolSistema,
+} from "@/lib/auth/session";
+import { registrarEventoAuditoria } from "@/lib/security/auditLog";
+import {
+  verificarOrigenPermitido,
+  verificarRateLimit,
+} from "@/lib/security/rateLimit";
+import { sanitizarErrorPublico } from "@/lib/security/safeError";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/supabase";
@@ -92,6 +102,10 @@ export async function crearColaboradorAction(
   payload: CrearColaboradorPayload
 ): Promise<CrearColaboradorResultado> {
   try {
+    if (!verificarOrigenPermitido()) {
+      return { ok: false, error: "Origen de solicitud no autorizado." };
+    }
+
     // 0. Autorización: el service role omite RLS, por lo que solo RH puede invocarlo.
     const sesion = createSessionClient();
     const {
@@ -102,15 +116,30 @@ export async function crearColaboradorAction(
       return { ok: false, error: "Sesión no válida. Inicia sesión nuevamente." };
     }
 
+    const controlTasa = verificarRateLimit(
+      `rh-alta:${solicitante.id}`,
+      15,
+      60 * 1000
+    );
+    if (!controlTasa.permitido) {
+      return {
+        ok: false,
+        error: "Has realizado demasiadas operaciones seguidas. Espera un momento.",
+      };
+    }
+
     const supabaseAdmin = createAdminClient();
 
     const { data: perfilSolicitante } = await supabaseAdmin
       .from("colaboradores")
-      .select("rol_sistema")
+      .select("rol_sistema, estatus")
       .eq("id", solicitante.id)
       .maybeSingle();
 
-    if (perfilSolicitante?.rol_sistema !== ROL_AUTORIZADO) {
+    if (
+      !esCuentaColaboradorActiva(perfilSolicitante?.estatus) ||
+      normalizarRolSistema(perfilSolicitante?.rol_sistema) !== ROL_AUTORIZADO
+    ) {
       return {
         ok: false,
         error: "No cuentas con permisos de Recursos Humanos para dar de alta colaboradores.",
@@ -145,7 +174,10 @@ export async function crearColaboradorAction(
         ok: false,
         error: yaExiste
           ? `Ya existe una cuenta con el correo ${correo}.`
-          : `No se pudo crear la cuenta de acceso: ${authError?.message ?? "error desconocido"}`,
+          : sanitizarErrorPublico(
+              authError,
+              "No se pudo crear la cuenta de acceso del colaborador."
+            ),
       };
     }
 
@@ -175,9 +207,24 @@ export async function crearColaboradorAction(
         ok: false,
         error:
           mensajeUnicidad ??
-          `No se pudo registrar el expediente: ${insertError?.message ?? "error desconocido"}`,
+          sanitizarErrorPublico(
+            insertError,
+            "No se pudo registrar el expediente del colaborador."
+          ),
       };
     }
+
+    void registrarEventoAuditoria({
+      evento: "RH_ALTA_COLABORADOR",
+      actorId: solicitante.id,
+      actorEmail: solicitante.email ?? null,
+      objetivoId: userId,
+      detalles: {
+        correoCorporativo: correo,
+        empresa: payload.empresa,
+        rolSistema: payload.rol_sistema,
+      },
+    });
 
     return {
       ok: true,
@@ -187,7 +234,87 @@ export async function crearColaboradorAction(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : "Error inesperado al crear el colaborador.",
+      error: sanitizarErrorPublico(
+        err,
+        "Error inesperado al crear el colaborador."
+      ),
+    };
+  }
+}
+
+/**
+ * Sincroniza el estatus laboral ('Activo' vs 'Inactivo' / 'Baja') con `auth.users`
+ * para bloquear o rehabilitar inmediatamente el acceso a la plataforma.
+ * Exclusivo para Recursos Humanos.
+ */
+export async function sincronizarEstatusAccesoColaboradorAction(payload: {
+  colaboradorId: string;
+  nuevoEstatus: "Activo" | "Inactivo" | "Baja" | string;
+  motivoBaja?: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    if (!verificarOrigenPermitido()) {
+      return { ok: false, error: "Origen de solicitud no autorizado." };
+    }
+
+    const sesion = createSessionClient();
+    const {
+      data: { user: solicitante },
+    } = await sesion.auth.getUser();
+
+    if (!solicitante) {
+      return { ok: false, error: "Sesión no válida. Inicia sesión nuevamente." };
+    }
+
+    const supabaseAdmin = createAdminClient();
+    const { data: perfilSolicitante } = await supabaseAdmin
+      .from("colaboradores")
+      .select("rol_sistema, estatus")
+      .eq("id", solicitante.id)
+      .maybeSingle();
+
+    if (
+      !esCuentaColaboradorActiva(perfilSolicitante?.estatus) ||
+      normalizarRolSistema(perfilSolicitante?.rol_sistema) !== ROL_AUTORIZADO
+    ) {
+      return {
+        ok: false,
+        error: "Solo Recursos Humanos puede modificar el estatus de acceso.",
+      };
+    }
+
+    const targetId = (payload.colaboradorId ?? "").trim();
+    if (!targetId || targetId.startsWith("row-")) {
+      return { ok: false, error: "Identificador de colaborador no válido." };
+    }
+
+    const cuentaActiva = esCuentaColaboradorActiva(payload.nuevoEstatus);
+
+    // Bloquear ('876000h' = ~100 años) o rehabilitar ('none') en auth.users
+    await supabaseAdmin.auth.admin.updateUserById(targetId, {
+      ban_duration: cuentaActiva ? "none" : "876000h",
+    });
+
+    void registrarEventoAuditoria({
+      evento: "RH_CAMBIO_ESTATUS_COLABORADOR",
+      actorId: solicitante.id,
+      actorEmail: solicitante.email ?? null,
+      objetivoId: targetId,
+      detalles: {
+        nuevoEstatus: payload.nuevoEstatus,
+        cuentaActiva,
+        motivoBaja: payload.motivoBaja ?? null,
+      },
+    });
+
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: sanitizarErrorPublico(
+        err,
+        "No se pudo sincronizar el estatus de acceso del colaborador."
+      ),
     };
   }
 }

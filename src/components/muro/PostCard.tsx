@@ -5,10 +5,11 @@ import type { FormEvent } from "react";
 import { enviarComentarioMuroAction } from "@/app/actions/muro";
 import { CheckCircleIcon, MessageSquareIcon } from "@/components/ui/icons";
 import {
+  extraerUrlsImagenes,
   formatearAlcancePublicacion,
-  formatearContenidoConEnlaces,
   formatearFechaPublicacion,
   partesFecha,
+  segmentarContenidoConEnlaces,
 } from "@/lib/muro";
 import { createClient } from "@/lib/supabase/client";
 import type {
@@ -22,7 +23,12 @@ interface PostCardProps {
   currentUserId: string | null;
   interaccionesIniciales?: InteraccionMuroRow[];
   isPriorityImage?: boolean;
-  onExpandImage?: (url: string) => void;
+  isHighlighted?: boolean;
+  onExpandImage?: (
+    url: string,
+    todasLasUrls?: string[],
+    indiceActual?: number
+  ) => void;
 }
 
 interface ConfigReaccion {
@@ -72,16 +78,24 @@ function esTipoReaccion(valor: string): valor is TipoReaccionMuro {
   return (TIPOS_REACCION as string[]).includes(valor);
 }
 
+const INTERACCIONES_VACIAS: InteraccionMuroRow[] = [];
+
 export default function PostCard({
   publicacion,
   currentUserId,
-  interaccionesIniciales = [],
+  interaccionesIniciales = INTERACCIONES_VACIAS,
   isPriorityImage = false,
+  isHighlighted = false,
   onExpandImage,
 }: PostCardProps) {
-  const [imagenExpandidaLocal, setImagenExpandidaLocal] = useState<
-    string | null
+  const [indiceExpandidoLocal, setIndiceExpandidoLocal] = useState<
+    number | null
   >(null);
+
+  const imagenes = useMemo(
+    () => extraerUrlsImagenes(publicacion.imagen_url),
+    [publicacion.imagen_url]
+  );
 
   const [interacciones, setInteracciones] = useState<InteraccionMuroRow[]>(
     interaccionesIniciales
@@ -157,6 +171,7 @@ export default function PostCard({
 
   const [acuseConfirmado, setAcuseConfirmado] = useState<boolean>(yaTieneAcuse);
   const [isSubmittingAcuse, setIsSubmittingAcuse] = useState(false);
+  const isSubmittingAcuseRef = useRef(false);
 
   useEffect(() => {
     setAcuseConfirmado(yaTieneAcuse);
@@ -176,6 +191,7 @@ export default function PostCard({
   // Estado del formulario de comentario
   const [textoComentario, setTextoComentario] = useState("");
   const [isSubmittingComentario, setIsSubmittingComentario] = useState(false);
+  const isSubmittingComentarioRef = useRef(false);
   const [comentarioEnviadoRevision, setComentarioEnviadoRevision] =
     useState(false);
   const [errorInteraccion, setErrorInteraccion] = useState<string | null>(null);
@@ -186,29 +202,47 @@ export default function PostCard({
     publicacion.fecha_publicacion &&
       new Date(publicacion.fecha_publicacion).getTime() > Date.now()
   );
-  const { dia, mes } = partesFecha(fechaBase);
-  const fechaAmigable = formatearFechaPublicacion(fechaBase);
+  const { dia, mes } = useMemo(() => partesFecha(fechaBase), [fechaBase]);
+  const fechaAmigable = useMemo(
+    () => formatearFechaPublicacion(fechaBase),
+    [fechaBase]
+  );
   const nombreAutor =
     publicacion.colaboradores?.nombre_completo?.trim() || "Recursos Humanos";
-  const alcancePublicacion = formatearAlcancePublicacion(
-    publicacion.empresa_destino,
-    publicacion.departamento_destino
+  const alcancePublicacion = useMemo(
+    () =>
+      formatearAlcancePublicacion(
+        publicacion.empresa_destino,
+        publicacion.departamento_destino
+      ),
+    [publicacion.empresa_destino, publicacion.departamento_destino]
   );
 
-  const contenidoHtmlSeguro = formatearContenidoConEnlaces(
-    publicacion.contenido
+  const segmentosContenido = useMemo(
+    () => segmentarContenidoConEnlaces(publicacion.contenido),
+    [publicacion.contenido]
   );
 
   useEffect(() => {
-    if (!imagenExpandidaLocal) return;
+    if (indiceExpandidoLocal === null) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setImagenExpandidaLocal(null);
+        setIndiceExpandidoLocal(null);
+      } else if (e.key === "ArrowRight" && imagenes.length > 1) {
+        setIndiceExpandidoLocal((prev) =>
+          prev === null ? null : (prev + 1) % imagenes.length
+        );
+      } else if (e.key === "ArrowLeft" && imagenes.length > 1) {
+        setIndiceExpandidoLocal((prev) =>
+          prev === null
+            ? null
+            : (prev - 1 + imagenes.length) % imagenes.length
+        );
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [imagenExpandidaLocal]);
+  }, [indiceExpandidoLocal, imagenes.length]);
 
   const resolverUserId = async (): Promise<string | null> => {
     if (currentUserId) return currentUserId;
@@ -223,8 +257,11 @@ export default function PostCard({
    * ACCIÓN 1.1: Confirmar Acuse de Recibo ('Acuse_Recibo', 'Aprobado')
    */
   const handleConfirmarAcuse = async () => {
-    if (acuseConfirmado || isSubmittingAcuse) return;
+    if (acuseConfirmado || isSubmittingAcuse || isSubmittingAcuseRef.current) {
+      return;
+    }
 
+    isSubmittingAcuseRef.current = true;
     setIsSubmittingAcuse(true);
     setErrorInteraccion(null);
 
@@ -275,6 +312,7 @@ export default function PostCard({
         ]);
       }
     } finally {
+      isSubmittingAcuseRef.current = false;
       setIsSubmittingAcuse(false);
     }
   };
@@ -429,8 +467,11 @@ export default function PostCard({
   const handleEnviarComentario = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const limpio = textoComentario.trim();
-    if (!limpio || isSubmittingComentario) return;
+    if (!limpio || isSubmittingComentario || isSubmittingComentarioRef.current) {
+      return;
+    }
 
+    isSubmittingComentarioRef.current = true;
     setIsSubmittingComentario(true);
     setComentarioEnviadoRevision(false);
     setErrorInteraccion(null);
@@ -459,21 +500,31 @@ export default function PostCard({
       setTextoComentario("");
       setComentarioEnviadoRevision(true);
     } finally {
+      isSubmittingComentarioRef.current = false;
       setIsSubmittingComentario(false);
     }
   };
 
-  const handleImageClick = (url: string) => {
+  const handleImageClick = (indice: number) => {
+    const url = imagenes[indice];
+    if (!url) return;
     if (onExpandImage) {
-      onExpandImage(url);
+      onExpandImage(url, imagenes, indice);
     } else {
-      setImagenExpandidaLocal(url);
+      setIndiceExpandidoLocal(indice);
     }
   };
 
   return (
     <>
-      <article className="flex flex-col gap-5 rounded-md border border-gray-100 bg-brand-surface p-6 shadow-sm sm:flex-row sm:items-start sm:gap-6">
+      <article
+        id={`publicacion-${publicacion.id}`}
+        className={`scroll-mt-8 flex flex-col gap-5 rounded-md border bg-brand-surface p-6 shadow-sm transition-all sm:flex-row sm:items-start sm:gap-6 target:border-brand-gold target:ring-2 target:ring-brand-gold/50 ${
+          isHighlighted
+            ? "border-brand-gold ring-2 ring-brand-gold/60 shadow-md"
+            : "border-gray-100"
+        }`}
+      >
         {/* Fecha destacada */}
         <div className="flex h-20 w-20 flex-shrink-0 flex-col items-center justify-center rounded-md bg-brand-beige">
           <span className="font-serif text-3xl font-black leading-none text-gray-900">
@@ -520,25 +571,104 @@ export default function PostCard({
             {publicacion.titulo}
           </h2>
 
-          {/* Contenido respetando saltos de línea y convirtiendo URLs en enlaces clickeables seguros */}
-          <div
-            className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800"
-            dangerouslySetInnerHTML={{ __html: contenidoHtmlSeguro }}
-          />
+          {/* Contenido respetando saltos de línea y convirtiendo URLs en enlaces clickeables seguros (sin dangerouslySetInnerHTML) */}
+          <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
+            {segmentosContenido.map((seg, idx) =>
+              seg.tipo === "enlace" ? (
+                <a
+                  key={`seg-${idx}`}
+                  href={seg.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-semibold text-brand-gold underline decoration-brand-gold/60 underline-offset-2 transition-colors hover:text-brand-dark"
+                >
+                  {seg.texto}
+                </a>
+              ) : (
+                <span key={`seg-${idx}`}>{seg.valor}</span>
+              )
+            )}
+          </div>
 
-          {/* Imagen adjunta alineada a la izquierda (Smart Fit) */}
-          {publicacion.imagen_url && (
+          {/* Galería de imágenes ordenada y armónica */}
+          {imagenes.length === 1 && (
             <div className="mt-4 flex justify-start">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={publicacion.imagen_url}
+                src={imagenes[0]}
                 alt={publicacion.titulo}
-                onClick={() => handleImageClick(publicacion.imagen_url!)}
+                onClick={() => handleImageClick(0)}
                 {...(isPriorityImage
                   ? { fetchPriority: "high" as const }
                   : { loading: "lazy" as const })}
-                className="max-w-full w-auto h-auto max-h-[600px] object-contain object-left bg-transparent rounded-lg cursor-pointer transition-transform hover:scale-[1.01]"
+                className="h-auto max-h-[480px] w-auto max-w-full cursor-pointer rounded-lg border border-gray-200/80 bg-neutral-100/50 object-contain object-left transition-transform hover:scale-[1.01]"
               />
+            </div>
+          )}
+
+          {imagenes.length > 1 && (
+            <div className="mt-4 flex flex-col gap-2">
+              <div
+                className={`grid gap-3 ${
+                  imagenes.length === 2
+                    ? "max-w-3xl grid-cols-1 sm:grid-cols-2"
+                    : imagenes.length === 3
+                    ? "max-w-4xl grid-cols-1 sm:grid-cols-3"
+                    : "max-w-4xl grid-cols-2"
+                }`}
+              >
+                {imagenes.slice(0, 4).map((urlImg, idx) => {
+                  const restantes = imagenes.length - 4;
+                  const mostrarOverlayMas = idx === 3 && restantes > 0;
+                  const esPrioritaria = isPriorityImage && idx === 0;
+
+                  return (
+                    <button
+                      key={`${publicacion.id}-img-${idx}`}
+                      type="button"
+                      onClick={() => handleImageClick(idx)}
+                      aria-label={`Ver imagen ${idx + 1} de ${imagenes.length}: ${publicacion.titulo}`}
+                      className={`group relative w-full overflow-hidden rounded-lg border border-gray-200 bg-neutral-100 text-left shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-gold ${
+                        imagenes.length === 2
+                          ? "aspect-[4/3] max-h-[320px]"
+                          : imagenes.length === 3
+                          ? "aspect-[4/3] max-h-[260px]"
+                          : "aspect-[16/10] max-h-[240px]"
+                      }`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={urlImg}
+                        alt={`${publicacion.titulo} - imagen ${idx + 1} de ${imagenes.length}`}
+                        {...(esPrioritaria
+                          ? { fetchPriority: "high" as const }
+                          : { loading: "lazy" as const })}
+                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                      />
+
+                      {/* Indicador de orden armónico */}
+                      <span className="absolute left-2.5 top-2.5 rounded-sm bg-brand-dark/85 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-brand-gold shadow-sm backdrop-blur-sm">
+                        {idx + 1} / {imagenes.length}
+                      </span>
+
+                      {mostrarOverlayMas && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-brand-dark/75 text-white backdrop-blur-[2px] transition-colors group-hover:bg-brand-dark/85">
+                          <span className="font-serif text-2xl font-bold text-brand-gold">
+                            +{restantes}
+                          </span>
+                          <span className="mt-1 text-[10px] font-bold uppercase tracking-widest text-white">
+                            VER {imagenes.length} IMÁGENES
+                          </span>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                Galería de {imagenes.length} imágenes ordenadas · Haz clic en cualquiera para ampliar
+              </span>
             </div>
           )}
 
@@ -755,30 +885,74 @@ export default function PostCard({
       </article>
 
       {/* Lightbox de respaldo si PostCard se usa sin MuroPage */}
-      {imagenExpandidaLocal && (
+      {indiceExpandidoLocal !== null && imagenes[indiceExpandidoLocal] && (
         <div
           role="dialog"
           aria-modal="true"
           aria-label="Visor de imagen expandida"
-          onClick={() => setImagenExpandidaLocal(null)}
-          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 overflow-hidden overscroll-contain"
+          onClick={() => setIndiceExpandidoLocal(null)}
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center overflow-hidden overscroll-contain bg-black/90 p-4"
         >
           <button
             type="button"
             aria-label="Cerrar visor de imagen"
-            onClick={() => setImagenExpandidaLocal(null)}
+            onClick={() => setIndiceExpandidoLocal(null)}
             className="absolute right-6 top-6 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-xl font-bold text-white transition-colors hover:bg-white/25"
           >
             ✕
           </button>
 
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={imagenExpandidaLocal}
-            alt={publicacion.titulo}
+          {imagenes.length > 1 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="mb-3 rounded-full bg-white/10 px-4 py-1 text-[10px] font-bold uppercase tracking-widest text-brand-gold"
+            >
+              Imagen {indiceExpandidoLocal + 1} de {imagenes.length}
+            </div>
+          )}
+
+          <div
             onClick={(e) => e.stopPropagation()}
-            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
-          />
+            className="relative flex max-h-[82vh] max-w-[92vw] items-center justify-center"
+          >
+            {imagenes.length > 1 && (
+              <button
+                type="button"
+                aria-label="Imagen anterior"
+                onClick={() =>
+                  setIndiceExpandidoLocal(
+                    (indiceExpandidoLocal - 1 + imagenes.length) %
+                      imagenes.length
+                  )
+                }
+                className="mr-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-lg font-bold text-white transition-colors hover:bg-brand-gold hover:text-brand-dark"
+              >
+                ‹
+              </button>
+            )}
+
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imagenes[indiceExpandidoLocal]}
+              alt={`${publicacion.titulo} (${indiceExpandidoLocal + 1} de ${imagenes.length})`}
+              className="max-h-[80vh] max-w-[82vw] rounded-lg object-contain shadow-2xl"
+            />
+
+            {imagenes.length > 1 && (
+              <button
+                type="button"
+                aria-label="Imagen siguiente"
+                onClick={() =>
+                  setIndiceExpandidoLocal(
+                    (indiceExpandidoLocal + 1) % imagenes.length
+                  )
+                }
+                className="ml-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-lg font-bold text-white transition-colors hover:bg-brand-gold hover:text-brand-dark"
+              >
+                ›
+              </button>
+            )}
+          </div>
         </div>
       )}
     </>

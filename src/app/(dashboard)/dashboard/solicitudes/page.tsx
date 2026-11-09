@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
+import { obtenerFeriadosDinamicosAction } from "@/app/actions/calendario";
+import { obtenerConfigVacacionesNominaAction } from "@/app/actions/configuracionSolicitudes";
 import BalanceCards from "@/components/solicitudes/BalanceCards";
 import RequestList from "@/components/solicitudes/RequestList";
 import RequestsWorkspace from "@/components/solicitudes/RequestsWorkspace";
+import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
 import { createClient } from "@/lib/supabase/server";
 import type {
   EstatusSolicitud,
@@ -53,20 +56,6 @@ function normalizarEstatusSolicitud(
   return "Pendiente_Jefe";
 }
 
-function calcularDiasNaturalesUtc(
-  fechaInicio: string | null | undefined,
-  fechaFin: string | null | undefined
-): number {
-  if (!fechaInicio || !fechaFin) return 0;
-  const [y1, m1, d1] = fechaInicio.split("-").map(Number);
-  const [y2, m2, d2] = fechaFin.split("-").map(Number);
-  if (!y1 || !m1 || !d1 || !y2 || !m2 || !d2) return 0;
-  const inicioUtc = Date.UTC(y1, m1 - 1, d1);
-  const finUtc = Date.UTC(y2, m2 - 1, d2);
-  if (finUtc < inicioUtc) return 0;
-  return Math.round((finUtc - inicioUtc) / 86_400_000) + 1;
-}
-
 export default async function SolicitudesPage() {
   const supabase = createClient();
   const {
@@ -77,28 +66,39 @@ export default async function SolicitudesPage() {
     redirect("/login");
   }
 
-  // 1. Consultar `saldo_vacaciones` actual en `colaboradores`
-  const { data: colaborador } = await supabase
-    .from("colaboradores")
-    .select("saldo_vacaciones")
-    .eq("id", user.id)
-    .maybeSingle();
+  // Consultar en paralelo: perfil del colaborador, configuración del interruptor RH, feriados dinámicos y solicitudes del colaborador
+  const [
+    { data: colaborador },
+    configNomina,
+    feriadosDinamicos,
+    { data: filasSolicitudes },
+  ] = await Promise.all([
+    supabase
+      .from("colaboradores")
+      .select("saldo_vacaciones, empresa")
+      .eq("id", user.id)
+      .maybeSingle(),
+    obtenerConfigVacacionesNominaAction(),
+    obtenerFeriadosDinamicosAction(),
+    supabase
+      .from("solicitudes")
+      .select(
+        "id, colaborador_id, tipo_solicitud, fecha_inicio, fecha_fin, motivo, estatus, created_at"
+      )
+      .eq("colaborador_id", user.id)
+      .order("created_at", { ascending: false }),
+  ]);
 
   const saldoDias = colaborador?.saldo_vacaciones ?? 0;
+  const empresaColaborador = colaborador?.empresa?.trim() || "AIF";
+  const listaFeriados = Array.isArray(feriadosDinamicos)
+    ? feriadosDinamicos
+    : [];
 
   const saldoReal: SaldoVacaciones = {
     periodos_activos: saldoDias > 0 ? 1 : 0,
     dias_proporcionales: saldoDias,
   };
-
-  // 2. Consultar `solicitudes` filtrando por `colaborador_id`, ordenadas por `created_at` descendente
-  const { data: filasSolicitudes } = await supabase
-    .from("solicitudes")
-    .select(
-      "id, colaborador_id, tipo_solicitud, fecha_inicio, fecha_fin, motivo, estatus, created_at"
-    )
-    .eq("colaborador_id", user.id)
-    .order("created_at", { ascending: false });
 
   const solicitudesReales: Solicitud[] = (filasSolicitudes ?? []).map(
     (fila) => ({
@@ -113,7 +113,7 @@ export default async function SolicitudesPage() {
     })
   );
 
-  // Días ya comprometidos en solicitudes de "Vacaciones" pendientes de autorización
+  // Días ya comprometidos en solicitudes de "Vacaciones" pendientes de autorización (descontando feriados oficiales y de empresa)
   const diasVacacionesPendientes = (filasSolicitudes ?? []).reduce(
     (acum, fila) => {
       const tipoRaw = (fila.tipo_solicitud ?? "").trim().toLowerCase();
@@ -123,7 +123,13 @@ export default async function SolicitudesPage() {
         (estatusNorm === "Pendiente_Jefe" || estatusNorm === "Pendiente_RH")
       ) {
         return (
-          acum + calcularDiasNaturalesUtc(fila.fecha_inicio, fila.fecha_fin)
+          acum +
+          calcularDiasEfectivosSinFeriados(
+            fila.fecha_inicio,
+            fila.fecha_fin,
+            listaFeriados,
+            empresaColaborador
+          ).diasEfectivos
         );
       }
       return acum;
@@ -135,6 +141,7 @@ export default async function SolicitudesPage() {
     <RequestsWorkspace
       saldoVacaciones={saldoDias}
       diasVacacionesPendientes={diasVacacionesPendientes}
+      excepcionVacacionesNominaInicial={configNomina.excepcionActiva}
       userId={user.id}
       metrics={<BalanceCards saldo={saldoReal} />}
       list={<RequestList solicitudes={solicitudesReales} />}

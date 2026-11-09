@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { cerrarSesionServerAction } from "@/app/actions/auth";
 import { createClient } from "@/lib/supabase/client";
 
 /** 8 horas en milisegundos (8 * 60 * 60 * 1000 = 28,800,000 ms) */
@@ -41,7 +42,10 @@ export function useAutoLogout(timeoutMs: number = INACTIVITY_TIMEOUT_MS): void {
         window.localStorage.removeItem(STORAGE_KEY_LAST_ACTIVITY);
       }
       const supabase = createClient();
-      await supabase.auth.signOut();
+      await Promise.allSettled([
+        supabase.auth.signOut(),
+        cerrarSesionServerAction(),
+      ]);
     } catch {
       // Continuar con la redirección aunque falle la llamada de red
     } finally {

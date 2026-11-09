@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { obtenerDatosMuroAction } from "@/app/actions/muro";
 import { useAuthRole } from "@/components/auth/AuthRoleContext";
 import PostCard from "@/components/muro/PostCard";
 import { cumpleFiltroAudiencia } from "@/lib/muro";
 import { createClient } from "@/lib/supabase/client";
 import type { InteraccionMuroRow, PublicacionMuro } from "@/types/muro";
+
+const INTERACCIONES_VACIAS: InteraccionMuroRow[] = [];
 
 function ordenarPublicacionesPorFecha(
   lista: PublicacionMuro[]
@@ -28,13 +31,28 @@ export default function MuroPage() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [imagenExpandida, setImagenExpandida] = useState<string | null>(null);
+  const [galeriaExpandida, setGaleriaExpandida] = useState<{
+    urls: string[];
+    indice: number;
+  } | null>(null);
+  const [publicacionDestacadaId, setPublicacionDestacadaId] = useState<
+    string | null
+  >(null);
 
   const fetchMuroData = useCallback(async () => {
     setIsLoading(true);
     setErrorMsg(null);
 
     try {
+      // 0. Consultar vía Server Action con aislamiento de datos por rol/audiencia
+      const serverData = await obtenerDatosMuroAction();
+      if (serverData.ok) {
+        setCurrentUserId(serverData.currentUserId);
+        setPublicaciones(ordenarPublicacionesPorFecha(serverData.publicaciones));
+        setInteracciones(serverData.interacciones);
+        return;
+      }
+
       const supabase = createClient();
 
       const {
@@ -50,7 +68,7 @@ export default function MuroPage() {
       if (user?.id) {
         const { data: colab } = await supabase
           .from("colaboradores")
-          .select("*")
+          .select("rol_sistema, empresa, departamento")
           .eq("id", user.id)
           .maybeSingle();
 
@@ -61,7 +79,7 @@ export default function MuroPage() {
           if (colab.empresa?.trim()) {
             userEmpresa = colab.empresa.trim();
           }
-          const depColab = (colab.departamento ?? colab.area ?? "").trim();
+          const depColab = (colab.departamento ?? "").trim();
           if (depColab) {
             userDepartamento = depColab;
           }
@@ -70,7 +88,7 @@ export default function MuroPage() {
 
       const ahoraIso = new Date().toISOString();
 
-      // 2. Consultar muro_publicaciones:
+      // 2. Consultar en paralelo muro_publicaciones y muro_interacciones:
       // - Si NO es Recursos Humanos:
       //   * Ocultar comunicados programados a futuro con .lte('fecha_publicacion', ahoraIso)
       //   * Filtrar audiencia por empresa_destino ('Ambas' o userEmpresa) y departamento_destino ('Todos' o userDepartamento)
@@ -90,9 +108,15 @@ export default function MuroPage() {
           );
       }
 
-      const pubRes = await queryPublicaciones.order("fecha_publicacion", {
-        ascending: false,
-      });
+      const [pubRes, intRes] = await Promise.all([
+        queryPublicaciones.order("fecha_publicacion", {
+          ascending: false,
+        }),
+        supabase
+          .from("muro_interacciones")
+          .select("*, colaboradores!colaborador_id(nombre_completo)")
+          .order("created_at", { ascending: true }),
+      ]);
 
       if (!pubRes.error && pubRes.data) {
         const filtradas = esRH
@@ -134,12 +158,6 @@ export default function MuroPage() {
         setPublicaciones(ordenarPublicacionesPorFecha(filtradasFallback));
       }
 
-      // 2. Consultar muro_interacciones incluyendo el nombre del colaborador
-      const intRes = await supabase
-        .from("muro_interacciones")
-        .select("*, colaboradores!colaborador_id(nombre_completo)")
-        .order("created_at", { ascending: true });
-
       if (!intRes.error && intRes.data) {
         setInteracciones(intRes.data as unknown as InteraccionMuroRow[]);
       } else {
@@ -179,17 +197,80 @@ export default function MuroPage() {
     return mapa;
   }, [interacciones]);
 
-  // Cerrar el visor de pantalla completa con la tecla Escape
+  // Desplazar y resaltar la publicación específica cuando se navega desde Inicio (#publicacion-<id>)
   useEffect(() => {
-    if (!imagenExpandida) return;
+    if (isLoading || publicaciones.length === 0 || typeof window === "undefined") {
+      return;
+    }
+
+    const hash = window.location.hash.replace(/^#/, "");
+    const searchParams = new URLSearchParams(window.location.search);
+    const paramPubId = searchParams.get("publicacion");
+    const targetDomId = hash.startsWith("publicacion-")
+      ? hash
+      : paramPubId
+      ? `publicacion-${paramPubId}`
+      : "";
+
+    if (!targetDomId) return;
+
+    const pubId = targetDomId.replace(/^publicacion-/, "");
+    setPublicacionDestacadaId(pubId);
+
+    const timerScroll = window.setTimeout(() => {
+      const elemento = document.getElementById(targetDomId);
+      if (elemento) {
+        elemento.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 80);
+
+    const timerClear = window.setTimeout(() => {
+      setPublicacionDestacadaId(null);
+    }, 4500);
+
+    return () => {
+      window.clearTimeout(timerScroll);
+      window.clearTimeout(timerClear);
+    };
+  }, [isLoading, publicaciones]);
+
+  // Cerrar el visor de pantalla completa con Escape y navegar entre imágenes con flechas
+  useEffect(() => {
+    if (!galeriaExpandida) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setImagenExpandida(null);
+        setGaleriaExpandida(null);
+      } else if (e.key === "ArrowRight" && galeriaExpandida.urls.length > 1) {
+        setGaleriaExpandida((prev) =>
+          prev
+            ? { ...prev, indice: (prev.indice + 1) % prev.urls.length }
+            : null
+        );
+      } else if (e.key === "ArrowLeft" && galeriaExpandida.urls.length > 1) {
+        setGaleriaExpandida((prev) =>
+          prev
+            ? {
+                ...prev,
+                indice:
+                  (prev.indice - 1 + prev.urls.length) % prev.urls.length,
+              }
+            : null
+        );
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [imagenExpandida]);
+  }, [galeriaExpandida]);
+
+  const handleExpandImage = useCallback(
+    (url: string, todasLasUrls?: string[], indiceActual?: number) => {
+      setGaleriaExpandida({
+        urls: todasLasUrls && todasLasUrls.length > 0 ? todasLasUrls : [url],
+        indice: indiceActual ?? 0,
+      });
+    },
+    []
+  );
 
   return (
     <div className="flex flex-col px-10 py-8">
@@ -245,40 +326,132 @@ export default function MuroPage() {
               publicacion={publicacion}
               currentUserId={currentUserId}
               interaccionesIniciales={
-                interaccionesPorPublicacion[publicacion.id] ?? []
+                interaccionesPorPublicacion[publicacion.id] ??
+                INTERACCIONES_VACIAS
               }
               isPriorityImage={index === 0}
-              onExpandImage={(url) => setImagenExpandida(url)}
+              isHighlighted={publicacionDestacadaId === publicacion.id}
+              onExpandImage={handleExpandImage}
             />
           ))}
         </section>
       )}
 
-      {/* Visor de Pantalla Completa (Lightbox) */}
-      {imagenExpandida && (
+      {/* Visor de Pantalla Completa (Lightbox con soporte para múltiples imágenes ordenadas) */}
+      {galeriaExpandida && galeriaExpandida.urls[galeriaExpandida.indice] && (
         <div
           role="dialog"
           aria-modal="true"
           aria-label="Visor de imagen expandida"
-          onClick={() => setImagenExpandida(null)}
-          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 overflow-hidden overscroll-contain"
+          onClick={() => setGaleriaExpandida(null)}
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center overflow-hidden overscroll-contain bg-black/90 p-4"
         >
           <button
             type="button"
             aria-label="Cerrar visor de imagen"
-            onClick={() => setImagenExpandida(null)}
+            onClick={() => setGaleriaExpandida(null)}
             className="absolute right-6 top-6 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-xl font-bold text-white transition-colors hover:bg-white/25"
           >
             ✕
           </button>
 
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={imagenExpandida}
-            alt="Comunicado expandido"
+          {galeriaExpandida.urls.length > 1 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="mb-3 rounded-full bg-white/10 px-4 py-1 text-[10px] font-bold uppercase tracking-widest text-brand-gold"
+            >
+              Imagen {galeriaExpandida.indice + 1} de{" "}
+              {galeriaExpandida.urls.length}
+            </div>
+          )}
+
+          <div
             onClick={(e) => e.stopPropagation()}
-            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
-          />
+            className="relative flex max-h-[80vh] max-w-[92vw] items-center justify-center"
+          >
+            {galeriaExpandida.urls.length > 1 && (
+              <button
+                type="button"
+                aria-label="Imagen anterior"
+                onClick={() =>
+                  setGaleriaExpandida((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          indice:
+                            (prev.indice - 1 + prev.urls.length) %
+                            prev.urls.length,
+                        }
+                      : null
+                  )
+                }
+                className="mr-3 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 text-xl font-bold text-white transition-colors hover:bg-brand-gold hover:text-brand-dark"
+              >
+                ‹
+              </button>
+            )}
+
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={galeriaExpandida.urls[galeriaExpandida.indice]}
+              alt={`Comunicado expandido (${galeriaExpandida.indice + 1} de ${galeriaExpandida.urls.length})`}
+              className="max-h-[78vh] max-w-[82vw] rounded-lg object-contain shadow-2xl"
+            />
+
+            {galeriaExpandida.urls.length > 1 && (
+              <button
+                type="button"
+                aria-label="Imagen siguiente"
+                onClick={() =>
+                  setGaleriaExpandida((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          indice: (prev.indice + 1) % prev.urls.length,
+                        }
+                      : null
+                  )
+                }
+                className="ml-3 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 text-xl font-bold text-white transition-colors hover:bg-brand-gold hover:text-brand-dark"
+              >
+                ›
+              </button>
+            )}
+          </div>
+
+          {galeriaExpandida.urls.length > 1 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="mt-4 flex max-w-[90vw] items-center gap-2 overflow-x-auto px-2 py-1"
+            >
+              {galeriaExpandida.urls.map((thumbUrl, thumbIdx) => {
+                const activa = thumbIdx === galeriaExpandida.indice;
+                return (
+                  <button
+                    key={`thumb-${thumbIdx}`}
+                    type="button"
+                    onClick={() =>
+                      setGaleriaExpandida((prev) =>
+                        prev ? { ...prev, indice: thumbIdx } : null
+                      )
+                    }
+                    className={`relative h-14 w-20 shrink-0 overflow-hidden rounded border-2 transition-all ${
+                      activa
+                        ? "border-brand-gold opacity-100 scale-105"
+                        : "border-transparent opacity-55 hover:opacity-90"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={thumbUrl}
+                      alt={`Miniatura ${thumbIdx + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

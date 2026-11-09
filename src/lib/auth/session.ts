@@ -1,5 +1,12 @@
-import { cache } from "react";
+import * as React from "react";
 import { createClient } from "@/lib/supabase/server";
+
+const CLAVE_CACHE = "cache" as keyof typeof React;
+const fnCacheReact = React[CLAVE_CACHE] as unknown;
+const reactCache: <T extends (...args: never[]) => unknown>(fn: T) => T =
+  typeof fnCacheReact === "function"
+    ? (fnCacheReact as <T extends (...args: never[]) => unknown>(fn: T) => T)
+    : (fn) => fn;
 
 export type RolSistema = "Colaborador" | "Jefatura" | "Recursos Humanos";
 
@@ -28,11 +35,22 @@ export function normalizarRolSistema(raw: string | null | undefined): RolSistema
 }
 
 /**
+ * Evalúa si el estatus laboral en `public.colaboradores` permite el acceso activo al sistema.
+ * Soporta los valores del enum `public.estatus_colaborador`: 'Activo', 'Inactivo', 'Baja'.
+ */
+export function esCuentaColaboradorActiva(
+  estatus: string | null | undefined
+): boolean {
+  const norm = (estatus ?? "Activo").trim().toLowerCase();
+  return norm !== "inactivo" && norm !== "baja";
+}
+
+/**
  * Obtiene el usuario autenticado y su `rol_sistema` desde `colaboradores`.
  * Envuelto en `React.cache` para deduplicar la consulta dentro del mismo
  * ciclo de renderizado entre Layouts y Server Components.
  */
-export const obtenerSesionYRol = cache(
+export const obtenerSesionYRol = reactCache(
   async (): Promise<PerfilSesionActual | null> => {
     const supabase = createClient();
     const {
@@ -58,6 +76,10 @@ export const obtenerSesionYRol = cache(
         .ilike("correo_corporativo", user.email.trim())
         .maybeSingle();
       colaborador = colabPorCorreo ?? null;
+    }
+
+    if (colaborador && !esCuentaColaboradorActiva(colaborador.estatus)) {
+      return null;
     }
 
     const rolSistema = normalizarRolSistema(colaborador?.rol_sistema);

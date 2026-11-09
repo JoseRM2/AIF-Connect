@@ -6,7 +6,16 @@ import {
   AlertTriangleIcon,
   CheckCircleIcon,
 } from "@/components/ui/icons";
-import { formatearAlcancePublicacion } from "@/lib/muro";
+import {
+  extraerUrlsImagenes,
+  formatearAlcancePublicacion,
+  serializarUrlsImagenes,
+} from "@/lib/muro";
+import {
+  TAMANO_MAXIMO_BYTES,
+  TAMANO_MAXIMO_MB,
+  validarMagicBytesArchivo,
+} from "@/lib/storage/expedientes";
 import { createClient } from "@/lib/supabase/client";
 
 const DEPARTAMENTOS_CORPORATIVOS_BASE = [
@@ -61,6 +70,12 @@ interface AcuseReciboRow {
 
 type EtapaEnvio = "idle" | "uploading" | "saving";
 
+interface ImagenSeleccionadaItem {
+  id: string;
+  file: File;
+  previewUrl: string;
+}
+
 function obtenerFechaPublicacion(pub: PublicacionMuroRow): string | null {
   return pub.fecha_publicacion ?? pub.created_at ?? null;
 }
@@ -95,11 +110,16 @@ export default function ComunicadosTab() {
   ]);
   const [fechaProgramada, setFechaProgramada] = useState("");
   const [requiereAcuse, setRequiereAcuse] = useState(false);
-  const [imagenArchivo, setImagenArchivo] = useState<File | null>(null);
+  const [imagenesSeleccionadas, setImagenesSeleccionadas] = useState<
+    ImagenSeleccionadaItem[]
+  >([]);
+  const imagenesRef = useRef<ImagenSeleccionadaItem[]>([]);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const moderacionRef = useRef<HTMLElement | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const enProcesoRef = useRef(false);
   const [etapaEnvio, setEtapaEnvio] = useState<EtapaEnvio>("idle");
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [mensajeError, setMensajeError] = useState<string | null>(null);
@@ -268,6 +288,18 @@ export default function ComunicadosTab() {
     };
   }, []);
 
+  useEffect(() => {
+    imagenesRef.current = imagenesSeleccionadas;
+  }, [imagenesSeleccionadas]);
+
+  useEffect(() => {
+    return () => {
+      for (const item of imagenesRef.current) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+    };
+  }, []);
+
   // Cerrar modal de acuses con Escape
   useEffect(() => {
     if (!publicacionAcusesActiva) return;
@@ -281,14 +313,59 @@ export default function ComunicadosTab() {
   }, [publicacionAcusesActiva]);
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+
     setMensajeExito(null);
     setMensajeError(null);
-    setImagenArchivo(file);
+
+    const nuevosItems: ImagenSeleccionadaItem[] = files.map((file, idx) => ({
+      id: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+
+    setImagenesSeleccionadas((prev) => [...prev, ...nuevosItems]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const quitarImagenSeleccionada = (id: string) => {
+    setImagenesSeleccionadas((prev) => {
+      const item = prev.find((i) => i.id === id);
+      if (item) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+      return prev.filter((i) => i.id !== id);
+    });
+  };
+
+  const moverImagenSeleccionada = (indiceOrigen: number, indiceDestino: number) => {
+    setImagenesSeleccionadas((prev) => {
+      if (
+        indiceOrigen < 0 ||
+        indiceOrigen >= prev.length ||
+        indiceDestino < 0 ||
+        indiceDestino >= prev.length ||
+        indiceOrigen === indiceDestino
+      ) {
+        return prev;
+      }
+      const copia = [...prev];
+      const [movido] = copia.splice(indiceOrigen, 1);
+      copia.splice(indiceDestino, 0, movido);
+      return copia;
+    });
   };
 
   const limpiarArchivoSeleccionado = () => {
-    setImagenArchivo(null);
+    setImagenesSeleccionadas((prev) => {
+      for (const item of prev) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+      return [];
+    });
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -299,10 +376,18 @@ export default function ComunicadosTab() {
     const tituloLimpio = titulo.trim();
     const contenidoLimpio = contenido.trim();
 
-    if (!tituloLimpio || !contenidoLimpio || isSubmitting) return;
+    if (
+      !tituloLimpio ||
+      !contenidoLimpio ||
+      isSubmitting ||
+      enProcesoRef.current
+    ) {
+      return;
+    }
 
+    enProcesoRef.current = true;
     setIsSubmitting(true);
-    setEtapaEnvio(imagenArchivo ? "uploading" : "saving");
+    setEtapaEnvio(imagenesSeleccionadas.length > 0 ? "uploading" : "saving");
     setMensajeExito(null);
     setMensajeError(null);
 
@@ -322,35 +407,92 @@ export default function ComunicadosTab() {
         return;
       }
 
-      let imagenUrlPublica: string | null = null;
+      let urlsPublicasOrdenadas: string[] = [];
 
-      if (imagenArchivo) {
+      if (imagenesSeleccionadas.length > 0) {
         setEtapaEnvio("uploading");
+        const marcaTiempo = Date.now();
 
-        const extension =
-          imagenArchivo.name.split(".").pop()?.toLowerCase() || "jpg";
-        const baseLimpia = imagenArchivo.name
-          .replace(/\.[^/.]+$/, "")
-          .replace(/[^a-zA-Z0-9_-]/g, "_")
-          .slice(0, 40);
-        const fileName = `${Date.now()}_${baseLimpia || "comunicado"}.${extension}`;
+        const resultadosSubida = await Promise.all(
+          imagenesSeleccionadas.map(async (item, idx) => {
+            const archivoActual = item.file;
+            if (archivoActual.size > TAMANO_MAXIMO_BYTES) {
+              return {
+                ok: false as const,
+                idx,
+                nombre: archivoActual.name,
+                error: `La imagen excede el tamaño máximo permitido (${TAMANO_MAXIMO_MB} MB).`,
+              };
+            }
 
-        const { error: uploadError } = await supabase.storage
-          .from("comunicados")
-          .upload(fileName, imagenArchivo);
+            const errMagic = await validarMagicBytesArchivo(
+              archivoActual,
+              false
+            );
+            if (errMagic) {
+              return {
+                ok: false as const,
+                idx,
+                nombre: archivoActual.name,
+                error: errMagic,
+              };
+            }
 
-        if (uploadError) {
-          setMensajeError(`Error al subir imagen: ${uploadError.message}`);
-          alert("Error al subir imagen: " + uploadError.message);
+            const extensionRaw =
+              archivoActual.name.split(".").pop()?.toLowerCase() || "jpg";
+            const extension = ["jpg", "jpeg", "png", "webp"].includes(
+              extensionRaw
+            )
+              ? extensionRaw
+              : "jpg";
+            const baseLimpia = archivoActual.name
+              .replace(/\.[^/.]+$/, "")
+              .replace(/[^a-zA-Z0-9_-]/g, "_")
+              .slice(0, 40);
+            const fileName = `${marcaTiempo}_${idx + 1}_${baseLimpia || "comunicado"}.${extension}`;
+
+            const { error: uploadError } = await supabase.storage
+              .from("comunicados")
+              .upload(fileName, archivoActual);
+
+            if (uploadError) {
+              return {
+                ok: false as const,
+                idx,
+                nombre: archivoActual.name,
+                error: uploadError.message,
+              };
+            }
+
+            const { data: publicUrlData } = supabase.storage
+              .from("comunicados")
+              .getPublicUrl(fileName);
+
+            return {
+              ok: true as const,
+              url: publicUrlData.publicUrl,
+            };
+          })
+        );
+
+        const primerError = resultadosSubida.find((r) => !r.ok);
+        if (primerError && !primerError.ok) {
+          setMensajeError(
+            `Error al subir imagen #${primerError.idx + 1} (${primerError.nombre}): ${primerError.error}`
+          );
+          alert(
+            `Error al subir imagen #${primerError.idx + 1}: ` +
+              primerError.error
+          );
           return;
         }
 
-        const { data: publicUrlData } = supabase.storage
-          .from("comunicados")
-          .getPublicUrl(fileName);
-
-        imagenUrlPublica = publicUrlData.publicUrl;
+        urlsPublicasOrdenadas = resultadosSubida
+          .filter((r): r is { ok: true; url: string } => r.ok)
+          .map((r) => r.url);
       }
+
+      const imagenUrlPublica = serializarUrlsImagenes(urlsPublicasOrdenadas);
 
       setEtapaEnvio("saving");
 
@@ -407,6 +549,7 @@ export default function ComunicadosTab() {
       setMensajeError(msg);
       alert("Error al publicar comunicado: " + msg);
     } finally {
+      enProcesoRef.current = false;
       setIsSubmitting(false);
       setEtapaEnvio("idle");
     }
@@ -496,7 +639,11 @@ export default function ComunicadosTab() {
 
   const obtenerTextoBotonSubmit = (): string => {
     if (!isSubmitting) return "PUBLICAR COMUNICADO";
-    if (etapaEnvio === "uploading") return "SUBIENDO IMAGEN…";
+    if (etapaEnvio === "uploading") {
+      return imagenesSeleccionadas.length > 1
+        ? `SUBIENDO ${imagenesSeleccionadas.length} IMÁGENES…`
+        : "SUBIENDO IMAGEN…";
+    }
     return "PUBLICANDO COMUNICADO…";
   };
 
@@ -687,42 +834,140 @@ export default function ComunicadosTab() {
               </span>
             </div>
 
-            {/* Campo: Imagen Adjunta Opcional */}
+            {/* Campo: Imágenes Adjuntas Opcionales (Múltiples con Ordenamiento) */}
             <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="comunicado-imagen"
-                className="text-[9px] font-bold uppercase tracking-widest text-gray-500"
-              >
-                IMAGEN ADJUNTA (OPCIONAL)
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label
+                  htmlFor="comunicado-imagen"
+                  className="text-[9px] font-bold uppercase tracking-widest text-gray-500"
+                >
+                  IMÁGENES ADJUNTAS (OPCIONAL · PUEDES SELECCIONAR VARIAS)
+                </label>
+                {imagenesSeleccionadas.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={limpiarArchivoSeleccionado}
+                    className="text-[9px] font-bold uppercase tracking-wider text-status-danger hover:underline"
+                  >
+                    Vaciar todas ({imagenesSeleccionadas.length})
+                  </button>
+                )}
+              </div>
               <div className="flex flex-wrap items-center gap-3">
                 <input
                   ref={fileInputRef}
                   id="comunicado-imagen"
                   type="file"
                   accept="image/*"
+                  multiple
                   disabled={isSubmitting}
                   onChange={handleFileChange}
                   className="flex-1 rounded-sm border border-gray-200 bg-brand-surface px-3.5 py-2 text-xs text-gray-700 file:mr-3 file:cursor-pointer file:rounded-sm file:border-0 file:bg-brand-dark file:px-3 file:py-1 file:text-[10px] file:font-bold file:uppercase file:tracking-widest file:text-brand-gold hover:file:bg-brand-dark/90 focus:border-brand-gold focus:outline-none disabled:opacity-60"
                 />
-                {imagenArchivo && (
-                  <div className="flex items-center gap-2 rounded-sm border border-gray-200 bg-brand-beige/40 px-3 py-1.5 text-[11px] font-medium text-gray-700">
-                    <span className="max-w-[200px] truncate">
-                      {imagenArchivo.name}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={isSubmitting}
-                      onClick={limpiarArchivoSeleccionado}
-                      className="text-[10px] font-bold uppercase tracking-wider text-status-danger hover:underline"
-                    >
-                      Quitar
-                    </button>
-                  </div>
-                )}
               </div>
+              <span className="text-[10px] text-gray-400">
+                Puedes agregar una o más imágenes y ordenarlas antes de publicar.
+              </span>
             </div>
           </div>
+
+          {/* Galería de previsualización y ordenamiento de imágenes seleccionadas */}
+          {imagenesSeleccionadas.length > 0 && (
+            <div className="rounded-sm border border-gray-200 bg-brand-beige/25 p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-[9px] font-bold uppercase tracking-widest text-brand-dark">
+                    ORDEN DE IMÁGENES EN LA PUBLICACIÓN ({imagenesSeleccionadas.length})
+                  </span>
+                  <p className="text-[10px] text-gray-500">
+                    Arrastra las tarjetas o usa las flechas (← / →) para definir el orden exacto en que se mostrarán en el Muro.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                {imagenesSeleccionadas.map((item, idx) => (
+                  <div
+                    key={item.id}
+                    draggable={!isSubmitting}
+                    onDragStart={() => setDraggedIndex(idx)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => {
+                      if (draggedIndex !== null && draggedIndex !== idx) {
+                        moverImagenSeleccionada(draggedIndex, idx);
+                      }
+                      setDraggedIndex(null);
+                    }}
+                    onDragEnd={() => setDraggedIndex(null)}
+                    className={`group relative flex flex-col overflow-hidden rounded-md border bg-brand-surface shadow-sm transition-all ${
+                      draggedIndex === idx
+                        ? "border-brand-gold opacity-60 ring-2 ring-brand-gold"
+                        : "border-gray-200 hover:border-brand-gold/70"
+                    }`}
+                  >
+                    <div className="relative aspect-[4/3] w-full overflow-hidden bg-neutral-100">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={item.previewUrl}
+                        alt={`Previsualización ${idx + 1}: ${item.file.name}`}
+                        className="h-full w-full object-cover"
+                      />
+                      <span className="absolute left-2 top-2 rounded-sm bg-brand-dark/90 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-brand-gold shadow">
+                        #{idx + 1}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={isSubmitting}
+                        onClick={() => quitarImagenSeleccionada(item.id)}
+                        title="Quitar imagen"
+                        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-[11px] font-bold text-white transition-colors hover:bg-status-danger"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-1 border-t border-gray-100 px-2.5 py-1.5">
+                      <span
+                        title={item.file.name}
+                        className="truncate text-[10px] font-medium text-gray-600"
+                      >
+                        {item.file.name}
+                      </span>
+
+                      {imagenesSeleccionadas.length > 1 && (
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={isSubmitting || idx === 0}
+                            onClick={() => moverImagenSeleccionada(idx, idx - 1)}
+                            title="Mover antes"
+                            aria-label={`Mover imagen ${idx + 1} a la posición ${idx}`}
+                            className="rounded border border-gray-200 bg-brand-beige/40 px-1.5 py-0.5 text-[10px] font-bold text-gray-700 transition-colors hover:bg-brand-dark hover:text-brand-gold disabled:cursor-not-allowed disabled:opacity-30"
+                          >
+                            ←
+                          </button>
+                          <button
+                            type="button"
+                            disabled={
+                              isSubmitting ||
+                              idx === imagenesSeleccionadas.length - 1
+                            }
+                            onClick={() => moverImagenSeleccionada(idx, idx + 1)}
+                            title="Mover después"
+                            aria-label={`Mover imagen ${idx + 1} a la posición ${idx + 2}`}
+                            className="rounded border border-gray-200 bg-brand-beige/40 px-1.5 py-0.5 text-[10px] font-bold text-gray-700 transition-colors hover:bg-brand-dark hover:text-brand-gold disabled:cursor-not-allowed disabled:opacity-30"
+                          >
+                            →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Campo: Requiere Acuse */}
           <div className="rounded-sm border border-gray-100 bg-brand-beige/25 px-4 py-3">
@@ -961,6 +1206,7 @@ export default function ComunicadosTab() {
                 pub.empresa_destino,
                 pub.departamento_destino
               );
+              const imagenesPub = extraerUrlsImagenes(pub.imagen_url);
 
               return (
                 <article
@@ -982,9 +1228,11 @@ export default function ComunicadosTab() {
                             ● PROGRAMADO
                           </span>
                         )}
-                        {pub.imagen_url && (
+                        {imagenesPub.length > 0 && (
                           <span className="inline-flex items-center rounded-sm border border-gray-200 bg-brand-beige/60 px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-gray-600">
-                            CON IMAGEN
+                            {imagenesPub.length === 1
+                              ? "CON IMAGEN"
+                              : `${imagenesPub.length} IMÁGENES`}
                           </span>
                         )}
                         {pub.requiere_acuse ? (
@@ -1007,15 +1255,43 @@ export default function ComunicadosTab() {
                       {obtenerExtracto(pub.contenido)}
                     </p>
 
-                    {pub.imagen_url && (
+                    {imagenesPub.length === 1 && (
                       <div className="mt-3 overflow-hidden rounded-lg border border-gray-100 bg-neutral-100">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={pub.imagen_url}
+                          src={imagenesPub[0]}
                           alt={pub.titulo}
                           loading="lazy"
-                          className="w-full h-auto max-h-64 object-contain bg-neutral-100 rounded-lg"
+                          className="h-auto max-h-64 w-full rounded-lg bg-neutral-100 object-contain"
                         />
+                      </div>
+                    )}
+
+                    {imagenesPub.length > 1 && (
+                      <div
+                        className={`mt-3 grid gap-2 ${
+                          imagenesPub.length === 2
+                            ? "grid-cols-2"
+                            : "grid-cols-2 sm:grid-cols-3"
+                        }`}
+                      >
+                        {imagenesPub.slice(0, 6).map((urlImg, idxImg) => (
+                          <div
+                            key={`${pub.id}-img-${idxImg}`}
+                            className="relative aspect-[4/3] w-full overflow-hidden rounded-md border border-gray-200 bg-neutral-100"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={urlImg}
+                              alt={`${pub.titulo} - imagen ${idxImg + 1}`}
+                              loading="lazy"
+                              className="h-full w-full object-cover"
+                            />
+                            <span className="absolute left-1.5 top-1.5 rounded-sm bg-black/65 px-1.5 py-0.5 text-[8px] font-bold text-white">
+                              #{idxImg + 1}
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

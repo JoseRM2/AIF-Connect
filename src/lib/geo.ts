@@ -1,26 +1,7 @@
+import { calcularDistancia } from "@/lib/utils/geo";
 import type { GeoPoint, ZonaGeocerca } from "@/types/asistencia";
 
-const EARTH_RADIUS_M = 6_371_000;
-
-const toRad = (deg: number) => (deg * Math.PI) / 180;
-
-/**
- * Calcula la distancia exacta en metros entre dos coordenadas geográficas
- * utilizando la Fórmula de Haversine.
- */
-export function calcularDistancia(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number,
-): number {
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lon2 - lon1);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * EARTH_RADIUS_M * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-}
+export { calcularDistancia };
 
 /** Distancia en metros entre dos puntos (fórmula de Haversine). */
 export function distanciaMetros(a: GeoPoint, b: GeoPoint): number {
@@ -28,7 +9,7 @@ export function distanciaMetros(a: GeoPoint, b: GeoPoint): number {
 }
 
 export interface EvaluacionZona {
-  /** Zona más cercana (o null si el colaborador no tiene zonas). */
+  /** Zona coincidente dentro de rango, o la más cercana si ninguna coincide. */
   zona: ZonaGeocerca | null;
   distancia_m: number | null;
   dentro: boolean;
@@ -39,21 +20,38 @@ export function evaluarUbicacion(
   punto: GeoPoint,
   zonas: ZonaGeocerca[],
 ): EvaluacionZona {
-  let zona: ZonaGeocerca | null = null;
-  let distancia: number | null = null;
+  let zonaMasCercana: ZonaGeocerca | null = null;
+  let distanciaMinima: number | null = null;
+  let zonaEnRango: ZonaGeocerca | null = null;
+  let distanciaEnRango: number | null = null;
 
   for (const candidata of zonas) {
     const d = distanciaMetros(punto, candidata);
-    if (distancia === null || d < distancia) {
-      zona = candidata;
-      distancia = d;
+    if (distanciaMinima === null || d < distanciaMinima) {
+      zonaMasCercana = candidata;
+      distanciaMinima = d;
+    }
+    if (
+      d <= candidata.radio_m &&
+      (distanciaEnRango === null || d < distanciaEnRango)
+    ) {
+      zonaEnRango = candidata;
+      distanciaEnRango = d;
     }
   }
 
+  if (zonaEnRango && distanciaEnRango !== null) {
+    return {
+      zona: zonaEnRango,
+      distancia_m: distanciaEnRango,
+      dentro: true,
+    };
+  }
+
   return {
-    zona,
-    distancia_m: distancia,
-    dentro: zona !== null && distancia !== null && distancia <= zona.radio_m,
+    zona: zonaMasCercana,
+    distancia_m: distanciaMinima,
+    dentro: false,
   };
 }
 

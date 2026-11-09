@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import type { ReactNode } from "react";
 import { useAutoLogout } from "@/hooks/useAutoLogout";
 import type { PerfilSesionActual, RolSistema } from "@/lib/auth/session";
@@ -39,19 +39,23 @@ export function AuthRoleProvider({
   // Cierre de sesión automático tras 8 horas de inactividad en el Dashboard
   useAutoLogout();
 
-  const value: AuthRoleContextValue = perfil
-    ? {
-        userId: perfil.userId,
-        email: perfil.email,
-        nombreCompleto: perfil.nombreCompleto,
-        empresa: perfil.empresa,
-        departamento: perfil.departamento || "Todos",
-        rolSistema: perfil.rolSistema,
-        esJefatura:
-          perfil.rolSistema === "Jefatura" || Boolean(perfil.esJefatura),
-        esRecursosHumanos: perfil.rolSistema === "Recursos Humanos",
-      }
-    : DEFAULT_CONTEXT;
+  const value = useMemo<AuthRoleContextValue>(
+    () =>
+      perfil
+        ? {
+            userId: perfil.userId,
+            email: perfil.email,
+            nombreCompleto: perfil.nombreCompleto,
+            empresa: perfil.empresa,
+            departamento: perfil.departamento || "Todos",
+            rolSistema: perfil.rolSistema,
+            esJefatura:
+              perfil.rolSistema === "Jefatura" || Boolean(perfil.esJefatura),
+            esRecursosHumanos: perfil.rolSistema === "Recursos Humanos",
+          }
+        : DEFAULT_CONTEXT,
+    [perfil]
+  );
 
   return (
     <AuthRoleContext.Provider value={value}>

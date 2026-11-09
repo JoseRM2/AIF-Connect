@@ -83,12 +83,34 @@ export default async function AsistenciaPage() {
     redirect("/login");
   }
 
-  // 1. Consultar `zonas_geocerca`, `nombre_completo` y `empresa` del colaborador en Supabase
-  const { data: colaborador } = await supabase
-    .from("colaboradores")
-    .select("nombre_completo, empresa, zonas_geocerca")
-    .eq("id", user.id)
-    .maybeSingle();
+  const hoyIso = obtenerFechaHoyLocal();
+
+  // 1, 2 y 3. Ejecutar consultas de perfil, asistencia de hoy e historial en paralelo
+  const [
+    { data: colaborador },
+    { data: registroHoy },
+    { data: historialDb },
+  ] = await Promise.all([
+    supabase
+      .from("colaboradores")
+      .select("nombre_completo, empresa, zonas_geocerca")
+      .eq("id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("asistencias")
+      .select("*")
+      .eq("colaborador_id", user.id)
+      .eq("fecha", hoyIso)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("asistencias")
+      .select("*")
+      .eq("colaborador_id", user.id)
+      .order("fecha", { ascending: false })
+      .limit(20),
+  ]);
 
   const nombreColaborador =
     colaborador?.nombre_completo || user.email || "Colaborador";
@@ -99,18 +121,6 @@ export default async function AsistenciaPage() {
     zonasNormalizadas.length > 0
       ? zonasNormalizadas
       : COLABORADOR_MOCK.zonas_geocerca;
-
-  // 2. Consultar estrictamente el registro de asistencia para la fecha local de HOY (YYYY-MM-DD)
-  const hoyIso = obtenerFechaHoyLocal();
-
-  const { data: registroHoy } = await supabase
-    .from("asistencias")
-    .select("*")
-    .eq("colaborador_id", user.id)
-    .eq("fecha", hoyIso)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
 
   const tieneRegistroHoy =
     Boolean(registroHoy) && registroHoy?.fecha === hoyIso;
@@ -131,14 +141,6 @@ export default async function AsistenciaPage() {
   const ubicacionHoy = tieneRegistroHoy
     ? normalizarUbicacion(registroHoy?.ubicacion_entrada)
     : null;
-
-  // 3. Consultar los últimos 20 registros reales de `asistencias` del colaborador
-  const { data: historialDb } = await supabase
-    .from("asistencias")
-    .select("*")
-    .eq("colaborador_id", user.id)
-    .order("fecha", { ascending: false })
-    .limit(20);
 
   const registrosHistorial: Asistencia[] = (historialDb ?? []).map((fila) => ({
     id: fila.id,

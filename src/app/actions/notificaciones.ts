@@ -133,32 +133,24 @@ export async function obtenerNotificacionesPendientesAction(): Promise<ObtenerNo
       db = sesion as unknown as ReturnType<typeof createAdminClient>;
     }
 
-    // 1. Cargar todos los colaboradores para resolver perfil actual, equipo directo y nombres
-    const { data: todosColaboradores } = await db
+    // 1. Consultar primero únicamente el perfil del usuario actual para salir de inmediato si es Colaborador estándar
+    let { data: perfilData } = await db
       .from("colaboradores")
-      .select("*");
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
 
-    const listaColaboradores = (todosColaboradores ?? []) as unknown as Record<
-      string,
-      unknown
-    >[];
-    const mapaColaboradores = new Map<string, Record<string, unknown>>();
-    for (const c of listaColaboradores) {
-      if (c.id) {
-        mapaColaboradores.set(String(c.id), c);
-      }
+    if (!perfilData && user.email) {
+      const emailLimpio = user.email.trim();
+      const { data: porCorreo } = await db
+        .from("colaboradores")
+        .select("*")
+        .ilike("correo_corporativo", emailLimpio)
+        .maybeSingle();
+      perfilData = porCorreo ?? null;
     }
 
-    let perfilActual = mapaColaboradores.get(user.id) ?? null;
-    if (!perfilActual && user.email) {
-      const emailNorm = normalizarTexto(user.email);
-      perfilActual =
-        listaColaboradores.find(
-          (c) =>
-            normalizarTexto(c.correo_corporativo) === emailNorm ||
-            normalizarTexto(c.correo) === emailNorm
-        ) ?? null;
-    }
+    let perfilActual = (perfilData as unknown as Record<string, unknown> | null) ?? null;
 
     const rolSistema = normalizarRolSistema(
       perfilActual?.rol_sistema as string | null | undefined
@@ -179,28 +171,54 @@ export async function obtenerNotificacionesPendientesAction(): Promise<ObtenerNo
 
     const itemsAcumulados: NotificacionPendienteItem[] = [];
 
-    // Consultas en paralelo de las tablas necesarias
-    const [solicitudesRes, comentariosMuroRes, ticketsAsistenciaRes] =
-      await Promise.all([
-        db
-          .from("solicitudes")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        esRecursosHumanos
-          ? db
-              .from("muro_interacciones")
-              .select("*")
-              .eq("tipo_interaccion", "Comentario")
-              .eq("estatus_moderacion", "Pendiente")
-              .order("created_at", { ascending: false })
-          : Promise.resolve({ data: null, error: null }),
-        esRecursosHumanos
-          ? db
-              .from("tickets_asistencia")
-              .select("*")
-              .order("created_at", { ascending: false })
-          : Promise.resolve({ data: null, error: null }),
-      ]);
+    // 2. Consultas en paralelo de colaboradores y las tablas necesarias (solo para Jefatura / RH)
+    const [
+      { data: todosColaboradores },
+      solicitudesRes,
+      comentariosMuroRes,
+      ticketsAsistenciaRes,
+    ] = await Promise.all([
+      db.from("colaboradores").select("*"),
+      db
+        .from("solicitudes")
+        .select("*")
+        .order("created_at", { ascending: false }),
+      esRecursosHumanos
+        ? db
+            .from("muro_interacciones")
+            .select("*")
+            .eq("tipo_interaccion", "Comentario")
+            .eq("estatus_moderacion", "Pendiente")
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: null, error: null }),
+      esRecursosHumanos
+        ? db
+            .from("tickets_asistencia")
+            .select("*")
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    const listaColaboradores = (todosColaboradores ?? []) as unknown as Record<
+      string,
+      unknown
+    >[];
+    const mapaColaboradores = new Map<string, Record<string, unknown>>();
+    for (const c of listaColaboradores) {
+      if (c.id) {
+        mapaColaboradores.set(String(c.id), c);
+      }
+    }
+
+    if (!perfilActual && user.email) {
+      const emailNorm = normalizarTexto(user.email);
+      perfilActual =
+        listaColaboradores.find(
+          (c) =>
+            normalizarTexto(c.correo_corporativo) === emailNorm ||
+            normalizarTexto(c.correo) === emailNorm
+        ) ?? null;
+    }
 
     const todasSolicitudes = (solicitudesRes.data ?? []) as unknown as Record<
       string,

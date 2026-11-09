@@ -2,13 +2,11 @@
 
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import { iniciarSesionServerAction } from "@/app/actions/auth";
 import { reiniciarEstadoNotificacionesInicio } from "@/components/dashboard/NotificacionesProactivasModal";
-import { createClient } from "@/lib/supabase/client";
 import { LoadingOverlay } from "@/components/ui/LoadingOverlay";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -16,29 +14,37 @@ export default function LoginPage() {
 
   const handleLogin = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (isLoading) return;
+
+    const emailLimpio = email.trim();
+    if (!emailLimpio || !password) {
+      setError("Ingresa tu correo electrónico y contraseña.");
+      return;
+    }
+
     setError(null);
     setIsLoading(true);
 
     try {
-      const supabase = createClient();
-      const { error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      // 1. Autenticar en una única llamada vía Server Action:
+      // `@supabase/ssr` escribe las cookies `sb-*-auth-token` en la respuesta HTTP,
+      // las cuales son leídas tanto por el middleware como por `createBrowserClient`.
+      const serverRes = await iniciarSesionServerAction(emailLimpio, password);
 
-      if (authError) {
-        setError(authError.message);
+      if (!serverRes.ok) {
+        setError(serverRes.error || "Credenciales inválidas.");
         setIsLoading(false);
         return;
       }
 
-      // Reiniciar cualquier cierre previo de notificaciones para que el overlay con blur
-      // aparezca inmediatamente en este primer inicio de sesión sobre Inicio (/dashboard)
+      // 2. Reiniciar estado de cierre de notificaciones para que el overlay con blur
+      // aparezca de inmediato en este primer inicio de sesión sobre Inicio (/dashboard)
       reiniciarEstadoNotificacionesInicio(true);
 
-      // Mantenemos isLoading = true mientras Next.js completa la transición a /dashboard
-      router.replace("/dashboard");
-      router.refresh();
+      // 3. Navegación directa de documento completo hacia /dashboard:
+      // Evita la condición de carrera entre `router.push` y `router.refresh` en Next.js 14
+      // y garantiza que el middleware y los Server Components lean las nuevas cookies de sesión.
+      window.location.assign("/dashboard");
     } catch {
       setError("Ocurrió un error al iniciar sesión. Intenta nuevamente.");
       setIsLoading(false);
@@ -67,7 +73,12 @@ export default function LoginPage() {
           Plataforma de Colaboradores
         </h1>
 
-        <form onSubmit={handleLogin} className="flex flex-col space-y-6">
+        <form
+          method="post"
+          action="#"
+          onSubmit={handleLogin}
+          className="flex flex-col space-y-6"
+        >
           {/* Correo */}
           <div className="flex flex-col space-y-2">
             <label
@@ -93,7 +104,9 @@ export default function LoginPage() {
               </svg>
               <input
                 id="email"
+                name="email"
                 type="email"
+                required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="usuario@aif.com"
@@ -128,7 +141,9 @@ export default function LoginPage() {
               </svg>
               <input
                 id="password"
+                name="password"
                 type="password"
+                required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"

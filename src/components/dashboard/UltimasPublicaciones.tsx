@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { obtenerDatosMuroAction } from "@/app/actions/muro";
 import { useAuthRole } from "@/components/auth/AuthRoleContext";
 import PostCard from "@/components/dashboard/PostCard";
 import {
@@ -29,6 +30,13 @@ export default function UltimasPublicaciones() {
     async function cargarUltimasPublicaciones() {
       setIsLoading(true);
       try {
+        const serverData = await obtenerDatosMuroAction();
+        if (!activo) return;
+        if (serverData.ok) {
+          setPublicaciones(serverData.publicaciones.slice(0, 3));
+          return;
+        }
+
         const supabase = createClient();
         const ahoraIso = new Date().toISOString();
 

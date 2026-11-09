@@ -1,18 +1,22 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import {
   crearColaboradorAction,
+  sincronizarEstatusAccesoColaboradorAction,
   type CrearColaboradorPayload,
 } from "@/app/actions/colaboradores";
 import { createClient } from "@/lib/supabase/client";
 import VisorDocumentoExpedienteModal from "@/components/rh/VisorDocumentoExpedienteModal";
 import {
   ACCEPT_EXPEDIENTES,
+  CATALOGO_DOCUMENTOS_EXPEDIENTE,
   TAMANO_MAXIMO_MB,
+  obtenerMapaDocumentosExpediente,
   subirDocumentosExpediente,
   validarArchivoExpediente,
+  type CategoriaDocumentoExpediente,
   type TipoDocumentoExpediente,
 } from "@/lib/storage/expedientes";
 import type { Database } from "@/types/supabase";
@@ -280,6 +284,7 @@ function CampoArchivo({
 
 export default function ExpedienteColaboradorModal({
   colaboradorEditar = null,
+  colaboradoresExistentes,
   onGuardadoExitoso,
   onCerrar,
 }: ExpedienteColaboradorModalProps) {
@@ -452,19 +457,32 @@ export default function ExpedienteColaboradorModal({
     String(rawEditar.parentesco ?? "")
   );
 
-  // 7. Archivos (Nombres de referencia)
-  const [fileComprobante, setFileComprobante] = useState<File | null>(null);
-  const [fileCarta, setFileCarta] = useState<File | null>(null);
-  const [errorArchivo, setErrorArchivo] = useState<{
-    comprobante?: string;
-    carta?: string;
-  }>({});
-  const [inputKeys, setInputKeys] = useState({ comprobante: 0, carta: 0 });
+  // 7. Archivos (Catálogo de 20 documentos en tabla `expedientes_documentos`)
+  const [archivosSeleccionados, setArchivosSeleccionados] = useState<
+    Partial<Record<TipoDocumentoExpediente, File | null>>
+  >({});
+  const [urlsExistentes, setUrlsExistentes] = useState<
+    Partial<Record<TipoDocumentoExpediente, string>>
+  >(() => ({
+    ...(colaboradorEditar?.comprobante_estudios_url
+      ? { comprobante_estudios: colaboradorEditar.comprobante_estudios_url }
+      : {}),
+    ...(colaboradorEditar?.carta_recomendacion_url
+      ? { carta_recomendacion: colaboradorEditar.carta_recomendacion_url }
+      : {}),
+  }));
+  const [errorArchivo, setErrorArchivo] = useState<
+    Partial<Record<TipoDocumentoExpediente, string>>
+  >({});
+  const [inputKeys, setInputKeys] = useState<
+    Partial<Record<TipoDocumentoExpediente, number>>
+  >({});
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [visorDocumentoTipo, setVisorDocumentoTipo] =
     useState<TipoDocumentoExpediente | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const enProcesoRef = useRef<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [credencial, setCredencial] = useState<{
     colaborador: ColaboradorRow;
@@ -479,8 +497,27 @@ export default function ExpedienteColaboradorModal({
     [fechaIngreso]
   );
 
-  // Consultar colaboradores con bandera de supervisión (`es_jefatura = true`)
+  // Consultar colaboradores con bandera de supervisión (`es_jefatura = true`),
+  // reutilizando en memoria `colaboradoresExistentes` si ya fue proporcionado por `DirectorioTab`
   useEffect(() => {
+    if (colaboradoresExistentes && colaboradoresExistentes.length > 0) {
+      const jefesMemoria = colaboradoresExistentes
+        .filter(
+          (item): item is ColaboradorRow & { nombre_completo: string } =>
+            Boolean(item.es_jefatura && item.id && item.nombre_completo)
+        )
+        .map((item) => ({
+          id: item.id,
+          nombre_completo: item.nombre_completo,
+        }))
+        .sort((a, b) =>
+          a.nombre_completo.localeCompare(b.nombre_completo, "es")
+        );
+      setListaJefaturas(jefesMemoria);
+      setCargandoJefaturas(false);
+      return;
+    }
+
     let cancelado = false;
 
     async function cargarJefaturas() {
@@ -513,7 +550,34 @@ export default function ExpedienteColaboradorModal({
     return () => {
       cancelado = true;
     };
-  }, []);
+  }, [colaboradoresExistentes]);
+
+  // Cargar documentos existentes desde `public.expedientes_documentos` en modo edición
+  useEffect(() => {
+    const colabId = colaboradorEditar?.id;
+    if (!colabId) return;
+
+    let cancelado = false;
+    async function cargarDocsExistentes() {
+      const supabase = createClient();
+      const mapa = await obtenerMapaDocumentosExpediente(supabase, colabId!, {
+        comprobante_estudios_url: colaboradorEditar?.comprobante_estudios_url,
+        carta_recomendacion_url: colaboradorEditar?.carta_recomendacion_url,
+      });
+      if (!cancelado) {
+        setUrlsExistentes(mapa);
+      }
+    }
+    cargarDocsExistentes();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [
+    colaboradorEditar?.id,
+    colaboradorEditar?.comprobante_estudios_url,
+    colaboradorEditar?.carta_recomendacion_url,
+  ]);
 
   // Cerrar con tecla Escape
   useEffect(() => {
@@ -543,32 +607,34 @@ export default function ExpedienteColaboradorModal({
   }, [sueldo, bono]);
 
   const handleSeleccionArchivo =
-    (tipo: "comprobante" | "carta") => (e: ChangeEvent<HTMLInputElement>) => {
+    (tipo: TipoDocumentoExpediente) => (e: ChangeEvent<HTMLInputElement>) => {
       const archivo = e.target.files?.[0] ?? null;
-      const setFile = tipo === "comprobante" ? setFileComprobante : setFileCarta;
 
       if (!archivo) {
-        setFile(null);
+        setArchivosSeleccionados((prev) => ({ ...prev, [tipo]: null }));
         setErrorArchivo((prev) => ({ ...prev, [tipo]: undefined }));
         return;
       }
 
       const error = validarArchivoExpediente(archivo);
       if (error) {
-        setFile(null);
+        setArchivosSeleccionados((prev) => ({ ...prev, [tipo]: null }));
         setErrorArchivo((prev) => ({ ...prev, [tipo]: error }));
         // Remonta el input para limpiar la selección inválida
-        setInputKeys((prev) => ({ ...prev, [tipo]: prev[tipo] + 1 }));
+        setInputKeys((prev) => ({
+          ...prev,
+          [tipo]: (prev[tipo] ?? 0) + 1,
+        }));
         return;
       }
 
-      setFile(archivo);
+      setArchivosSeleccionados((prev) => ({ ...prev, [tipo]: archivo }));
       setErrorArchivo((prev) => ({ ...prev, [tipo]: undefined }));
     };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (isSubmitting || enProcesoRef.current) return;
 
     const nombrePilaLimpio = nombre.trim();
     const apellidosLimpio = apellidos.trim();
@@ -594,11 +660,17 @@ export default function ExpedienteColaboradorModal({
       return;
     }
 
-    if (errorArchivo.comprobante || errorArchivo.carta) {
+    const tieneErroresArchivo = Object.values(errorArchivo).some(Boolean);
+    if (tieneErroresArchivo) {
       setErrorMsg("Corrige los archivos seleccionados antes de guardar.");
       return;
     }
 
+    const hayArchivosPorSubir = Object.values(archivosSeleccionados).some(
+      (f) => Boolean(f)
+    );
+
+    enProcesoRef.current = true;
     setIsSubmitting(true);
     setErrorMsg(null);
 
@@ -642,8 +714,9 @@ export default function ExpedienteColaboradorModal({
         oficina: textoONull(oficina),
         reclutador: textoONull(reclutador),
 
-        // Fechas
-        fecha_ingreso: textoONull(fechaIngreso),
+        // Fechas (`fecha_ingreso` es NOT NULL en public.colaboradores)
+        fecha_ingreso:
+          textoONull(fechaIngreso) ?? new Date().toISOString().slice(0, 10),
         fecha_baja: textoONull(fechaBaja),
         motivo_baja: textoONull(motivoBaja),
         dia_cumpleanos: enteroONull("Día de cumpleaños", diaCumple),
@@ -680,18 +753,14 @@ export default function ExpedienteColaboradorModal({
       };
 
       if (colaboradorEditar?.id) {
-        // Modo Edición: primero se suben los documentos nuevos (si hay) y luego un único UPDATE.
-        // Sin archivos nuevos, las URLs actuales no se tocan.
+        // Modo Edición: primero se suben los documentos nuevos (si hay) a `expedientes` + `expedientes_documentos`
         let urlsArchivos: ColaboradorUpdate = {};
-        if (fileComprobante || fileCarta) {
+        if (hayArchivosPorSubir) {
           setIsUploading(true);
           const subida = await subirDocumentosExpediente(
             supabase,
             colaboradorEditar.id,
-            {
-              comprobante_estudios: fileComprobante,
-              carta_recomendacion: fileCarta,
-            }
+            archivosSeleccionados
           );
           if (subida.errores.length > 0) {
             throw new Error(
@@ -712,6 +781,15 @@ export default function ExpedienteColaboradorModal({
 
         if (error) {
           throw error;
+        }
+
+        // Si cambió el estatus laboral ('Activo' <-> 'Inactivo'), sincronizar bloqueo/rehabilitación en auth.users
+        if (colaboradorEditar.estatus !== estatus) {
+          await sincronizarEstatusAccesoColaboradorAction({
+            colaboradorId: colaboradorEditar.id,
+            nuevoEstatus: estatus,
+            motivoBaja: payloadMapeado.motivo_baja ?? null,
+          });
         }
 
         const actualizado: ColaboradorRow = (data as ColaboradorRow | null) ?? {
@@ -743,15 +821,12 @@ export default function ExpedienteColaboradorModal({
         let colaboradorFinal: ColaboradorRow = resultado.colaborador;
         let advertencia: string | undefined;
 
-        if (fileComprobante || fileCarta) {
+        if (hayArchivosPorSubir) {
           setIsUploading(true);
           const subida = await subirDocumentosExpediente(
             supabase,
             resultado.colaborador.id,
-            {
-              comprobante_estudios: fileComprobante,
-              carta_recomendacion: fileCarta,
-            }
+            archivosSeleccionados
           );
 
           const hayUrls = Object.keys(subida.urls).length > 0;
@@ -815,6 +890,7 @@ export default function ExpedienteColaboradorModal({
         );
       }
     } finally {
+      enProcesoRef.current = false;
       setIsUploading(false);
       setIsSubmitting(false);
     }
@@ -1821,47 +1897,69 @@ export default function ExpedienteColaboradorModal({
             </div>
           </section>
 
-          {/* 7. ARCHIVOS */}
+          {/* 7. ARCHIVOS (Catálogo de 20 documentos en `expedientes_documentos`) */}
           <section>
             <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2">
-              <h3 className={`${SECTION_TITLE} mb-0`}>ARCHIVOS</h3>
+              <div>
+                <h3 className={`${SECTION_TITLE} mb-0`}>
+                  ARCHIVOS DEL EXPEDIENTE DIGITAL ({Object.keys(urlsExistentes).length} /{" "}
+                  {CATALOGO_DOCUMENTOS_EXPEDIENTE.length} CARGADOS)
+                </h3>
+              </div>
               {colaboradorEditar && (
                 <button
                   type="button"
-                  onClick={() => setVisorDocumentoTipo("comprobante_estudios")}
+                  onClick={() => {
+                    const primeroCargado = CATALOGO_DOCUMENTOS_EXPEDIENTE.find(
+                      (d) => Boolean(urlsExistentes[d.tipo])
+                    );
+                    setVisorDocumentoTipo(primeroCargado?.tipo ?? "ine");
+                  }}
                   className="rounded-sm border border-brand-dark bg-brand-surface px-3 py-1 text-[9px] font-bold uppercase tracking-widest text-brand-dark transition-colors hover:bg-brand-dark hover:text-brand-gold"
                 >
                   ABRIR VISOR DE EXPEDIENTE
                 </button>
               )}
             </div>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <CampoArchivo
-                id={`file-estudios-${uid}`}
-                label="COMPROBANTE DE ESTUDIOS"
-                archivo={fileComprobante}
-                error={errorArchivo.comprobante}
-                urlActual={colaboradorEditar?.comprobante_estudios_url}
-                disabled={isSubmitting}
-                inputKey={inputKeys.comprobante}
-                onChange={handleSeleccionArchivo("comprobante")}
-                onVerDocumento={() =>
-                  setVisorDocumentoTipo("comprobante_estudios")
-                }
-              />
-              <CampoArchivo
-                id={`file-carta-${uid}`}
-                label="CARTA DE RECOMENDACIÓN"
-                archivo={fileCarta}
-                error={errorArchivo.carta}
-                urlActual={colaboradorEditar?.carta_recomendacion_url}
-                disabled={isSubmitting}
-                inputKey={inputKeys.carta}
-                onChange={handleSeleccionArchivo("carta")}
-                onVerDocumento={() =>
-                  setVisorDocumentoTipo("carta_recomendacion")
-                }
-              />
+
+            <div className="flex flex-col gap-5">
+              {(
+                [
+                  "Identificación y Personal",
+                  "Contratación y Normatividad",
+                  "Equipos, Responsivas y Home Office",
+                ] as readonly CategoriaDocumentoExpediente[]
+              ).map((categoria) => {
+                const docsCategoria = CATALOGO_DOCUMENTOS_EXPEDIENTE.filter(
+                  (d) => d.categoria === categoria
+                );
+                return (
+                  <div
+                    key={categoria}
+                    className="rounded-sm border border-gray-200 bg-brand-beige/15 p-4"
+                  >
+                    <h4 className="mb-3 border-b border-gray-200 pb-1.5 text-[9px] font-extrabold uppercase tracking-wider text-gray-800">
+                      {categoria}
+                    </h4>
+                    <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
+                      {docsCategoria.map(({ tipo, etiqueta }) => (
+                        <CampoArchivo
+                          key={tipo}
+                          id={`file-${tipo}-${uid}`}
+                          label={etiqueta.toUpperCase()}
+                          archivo={archivosSeleccionados[tipo] ?? null}
+                          error={errorArchivo[tipo]}
+                          urlActual={urlsExistentes[tipo] ?? null}
+                          disabled={isSubmitting}
+                          inputKey={inputKeys[tipo] ?? 0}
+                          onChange={handleSeleccionArchivo(tipo)}
+                          onVerDocumento={() => setVisorDocumentoTipo(tipo)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
 
@@ -1892,11 +1990,13 @@ export default function ExpedienteColaboradorModal({
 
       {visorDocumentoTipo && (
         <VisorDocumentoExpedienteModal
+          colaboradorId={colaboradorEditar?.id}
           nombreColaborador={
             `${nombre} ${apellidos}`.trim() ||
             colaboradorEditar?.nombre_completo ||
             "Colaborador"
           }
+          documentosIniciales={urlsExistentes}
           comprobanteEstudiosUrl={colaboradorEditar?.comprobante_estudios_url}
           cartaRecomendacionUrl={colaboradorEditar?.carta_recomendacion_url}
           documentoInicial={visorDocumentoTipo}

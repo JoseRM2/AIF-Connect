@@ -1,9 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import {
+  esCuentaColaboradorActiva,
+  normalizarRolSistema,
+} from "@/lib/auth/session";
 import type { Database } from "@/types/supabase";
 
-const PROTECTED_PREFIXES = ["/dashboard", "/rh", "/zonas"];
+const PROTECTED_PREFIXES = ["/dashboard", "/rh", "/zonas", "/muro"];
 const RH_ONLY_PREFIXES = ["/dashboard/rh", "/dashboard/zonas", "/rh", "/zonas"];
 
 export async function middleware(request: NextRequest) {
@@ -59,24 +63,43 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(dashboardUrl);
   }
 
-  // Regla 3 (RBAC): Módulos exclusivos de Recursos Humanos (/dashboard/rh, /dashboard/zonas)
+  // Regla 3 (Seguridad de Bajas + RBAC): Verificar estatus activo en rutas protegidas y rol RH en rutas administrativas
   const isRhOnlyRoute = RH_ONLY_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
 
-  if (user && isRhOnlyRoute) {
-    const { data: colaborador } = await supabase
+  if (user && (isProtectedRoute || isRhOnlyRoute)) {
+    let { data: colaborador } = await supabase
       .from("colaboradores")
-      .select("rol_sistema")
+      .select("rol_sistema, estatus")
       .eq("id", user.id)
       .maybeSingle();
 
-    const rolSistema = (colaborador?.rol_sistema ?? "").trim();
+    if (!colaborador && user.email) {
+      const { data: colabPorCorreo } = await supabase
+        .from("colaboradores")
+        .select("rol_sistema, estatus")
+        .ilike("correo_corporativo", user.email.trim())
+        .maybeSingle();
+      colaborador = colabPorCorreo ?? null;
+    }
 
-    if (rolSistema !== "Recursos Humanos") {
-      const homeUrl = request.nextUrl.clone();
-      homeUrl.pathname = "/dashboard";
-      return NextResponse.redirect(homeUrl);
+    // Si el colaborador fue dado de baja ('Inactivo' o 'Baja'), revocar sesión de inmediato
+    if (colaborador && !esCuentaColaboradorActiva(colaborador.estatus)) {
+      await supabase.auth.signOut();
+      const loginUrl = request.nextUrl.clone();
+      loginUrl.pathname = "/login";
+      return NextResponse.redirect(loginUrl);
+    }
+
+    if (isRhOnlyRoute) {
+      const rolSistema = normalizarRolSistema(colaborador?.rol_sistema);
+
+      if (rolSistema !== "Recursos Humanos") {
+        const homeUrl = request.nextUrl.clone();
+        homeUrl.pathname = "/dashboard";
+        return NextResponse.redirect(homeUrl);
+      }
     }
   }
 

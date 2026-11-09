@@ -1,5 +1,10 @@
 "use server";
 
+import { obtenerFeriadosDinamicosAction } from "@/app/actions/calendario";
+import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
+import { registrarEventoAuditoria } from "@/lib/security/auditLog";
+import { verificarOrigenPermitido } from "@/lib/security/rateLimit";
+import { sanitizarErrorPublico } from "@/lib/security/safeError";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 
@@ -97,19 +102,7 @@ export async function obtenerSolicitudesEquipoAction(): Promise<ObtenerSolicitud
     const supabaseAdmin = createAdminClient();
     const userId = user.id;
 
-    // 1. Obtener el perfil del jefe autenticado
-    const { data: perfilJefe } = await supabaseAdmin
-      .from("colaboradores")
-      .select("id, nombre_completo, rol_sistema")
-      .eq("id", userId)
-      .maybeSingle();
-
-    const nombreJefe = perfilJefe?.nombre_completo?.trim() || "";
-    const nombreJefeNorm = normalizarTextoComparacion(nombreJefe);
-    const rolSistema = perfilJefe?.rol_sistema?.trim() || "Jefatura";
-
-    // 2. Obtener todos los colaboradores y filtrar los que reportan a este jefe
-    // por `jefe_directo_id` (UUID) o `jefe_directo` (UUID o nombre completo)
+    // 1. Obtener todos los colaboradores, resolver el perfil del jefe autenticado y filtrar su equipo directo
     const { data: todosColaboradores, error: colabError } = await supabaseAdmin
       .from("colaboradores")
       .select("*")
@@ -121,6 +114,11 @@ export async function obtenerSolicitudesEquipoAction(): Promise<ObtenerSolicitud
         error: `Error al consultar colaboradores: ${colabError.message}`,
       };
     }
+
+    const perfilJefe = (todosColaboradores ?? []).find((c) => c.id === userId);
+    const nombreJefe = perfilJefe?.nombre_completo?.trim() || "";
+    const nombreJefeNorm = normalizarTextoComparacion(nombreJefe);
+    const rolSistema = perfilJefe?.rol_sistema?.trim() || "Jefatura";
 
     const listaEquipo = (todosColaboradores ?? []).filter((c) =>
       perteneceAlEquipoDelJefe(
@@ -228,6 +226,13 @@ export async function resolverSolicitudEquipoAction(
   decision: "Aprobado" | "Rechazado"
 ): Promise<ResolverSolicitudEquipoResult> {
   try {
+    if (!verificarOrigenPermitido()) {
+      return {
+        ok: false,
+        error: "Origen de solicitud no autorizado.",
+      };
+    }
+
     const sesion = createSessionClient();
     const {
       data: { user },
@@ -308,24 +313,22 @@ export async function resolverSolicitudEquipoAction(
       !yaEstabaAprobada &&
       colaborador
     ) {
-      const [y1, m1, d1] = (solicitud.fecha_inicio || "")
-        .split("-")
-        .map(Number);
-      const [y2, m2, d2] = (solicitud.fecha_fin || "").split("-").map(Number);
+      const feriadosDinamicos = await obtenerFeriadosDinamicosAction();
+      const calculoDias = calcularDiasEfectivosSinFeriados(
+        solicitud.fecha_inicio || "",
+        solicitud.fecha_fin || solicitud.fecha_inicio || "",
+        feriadosDinamicos,
+        colaborador.empresa
+      );
 
-      if (y1 && m1 && d1 && y2 && m2 && d2) {
-        const inicioMs = Date.UTC(y1, m1 - 1, d1);
-        const finMs = Date.UTC(y2, m2 - 1, d2);
-        const diasSolicitados =
-          finMs >= inicioMs
-            ? Math.round((finMs - inicioMs) / 86_400_000) + 1
-            : 1;
+      if (calculoDias.diasNaturales > 0) {
+        const diasSolicitados = calculoDias.diasEfectivos;
         const saldoActual = Number(colaborador.saldo_vacaciones ?? 0);
 
         if (diasSolicitados > saldoActual) {
           return {
             ok: false,
-            error: `No se puede aprobar la solicitud: el colaborador solicita ${diasSolicitados} día(s) de vacaciones, pero solo cuenta con ${saldoActual} día(s) disponibles.`,
+            error: `No se puede aprobar la solicitud: el colaborador solicita ${diasSolicitados} día(s) efectivos de vacaciones, pero solo cuenta con ${saldoActual} día(s) disponibles.`,
           };
         }
 
@@ -370,9 +373,25 @@ export async function resolverSolicitudEquipoAction(
     if (updateError) {
       return {
         ok: false,
-        error: `Error al actualizar la solicitud: ${updateError.message}`,
+        error: sanitizarErrorPublico(
+          updateError,
+          "No se pudo actualizar el estatus de la solicitud."
+        ),
       };
     }
+
+    void registrarEventoAuditoria({
+      evento: "JEFATURA_RESOLUCION_SOLICITUD",
+      actorId: userId,
+      actorEmail: user.email ?? null,
+      objetivoId: solicitudId,
+      detalles: {
+        colaboradorId: solicitud.colaborador_id,
+        tipoSolicitud: solicitud.tipo_solicitud,
+        decision,
+        estatusAplicado,
+      },
+    });
 
     return {
       ok: true,
@@ -381,10 +400,10 @@ export async function resolverSolicitudEquipoAction(
   } catch (err) {
     return {
       ok: false,
-      error:
-        err instanceof Error
-          ? err.message
-          : "Error inesperado al resolver la solicitud.",
+      error: sanitizarErrorPublico(
+        err,
+        "Error inesperado al resolver la solicitud."
+      ),
     };
   }
 }

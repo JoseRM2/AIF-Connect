@@ -1,8 +1,123 @@
 "use server";
 
+import { obtenerSesionYRol } from "@/lib/auth/session";
+import { cumpleFiltroAudiencia } from "@/lib/muro";
+import {
+  verificarOrigenPermitido,
+  verificarRateLimit,
+} from "@/lib/security/rateLimit";
+import { sanitizarErrorPublico } from "@/lib/security/safeError";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
-import type { InteraccionMuroRow } from "@/types/muro";
+import type { InteraccionMuroRow, PublicacionMuro } from "@/types/muro";
+
+export interface DatosMuroResponse {
+  ok: boolean;
+  error?: string;
+  currentUserId: string | null;
+  esRecursosHumanos: boolean;
+  publicaciones: PublicacionMuro[];
+  interacciones: InteraccionMuroRow[];
+}
+
+/**
+ * Obtiene en una sola consulta del lado servidor las publicaciones e interacciones
+ * del Muro Corporativo, aplicando aislamiento de datos (audiencia por empresa/departamento
+ * y moderación de comentarios) y exponiendo únicamente `nombre_completo` de los autores
+ * sin abrir acceso de lectura directo sobre `public.colaboradores` en el navegador.
+ */
+export async function obtenerDatosMuroAction(): Promise<DatosMuroResponse> {
+  try {
+    const sesion = await obtenerSesionYRol();
+    if (!sesion) {
+      return {
+        ok: false,
+        error: "Sesión no válida. Inicia sesión nuevamente.",
+        currentUserId: null,
+        esRecursosHumanos: false,
+        publicaciones: [],
+        interacciones: [],
+      };
+    }
+
+    const db = createAdminClient();
+    const esRH = sesion.esRecursosHumanos;
+    const ahoraIso = new Date().toISOString();
+
+    let queryPub = db
+      .from("muro_publicaciones")
+      .select("*, colaboradores!autor_id(nombre_completo)");
+
+    if (!esRH) {
+      queryPub = queryPub.lte("fecha_publicacion", ahoraIso);
+    }
+
+    const [pubRes, intRes] = await Promise.all([
+      queryPub.order("fecha_publicacion", { ascending: false }),
+      db
+        .from("muro_interacciones")
+        .select("*, colaboradores!colaborador_id(nombre_completo)")
+        .order("created_at", { ascending: true }),
+    ]);
+
+    if (pubRes.error) {
+      return {
+        ok: false,
+        error: "No fue posible consultar los comunicados oficiales.",
+        currentUserId: sesion.userId,
+        esRecursosHumanos: esRH,
+        publicaciones: [],
+        interacciones: [],
+      };
+    }
+
+    const publicacionesFiltradas = (
+      (pubRes.data ?? []) as unknown as PublicacionMuro[]
+    ).filter((p) => {
+      if (esRH) return true;
+      const fechaLista =
+        !p.fecha_publicacion ||
+        new Date(p.fecha_publicacion).getTime() <= Date.now();
+      return (
+        fechaLista &&
+        cumpleFiltroAudiencia(p, sesion.empresa, sesion.departamento)
+      );
+    });
+
+    const idsPublicacionesVisibles = new Set(
+      publicacionesFiltradas.map((p) => p.id)
+    );
+
+    const interaccionesFiltradas = (
+      (intRes.data ?? []) as unknown as InteraccionMuroRow[]
+    ).filter((i) => {
+      if (!idsPublicacionesVisibles.has(i.publicacion_id)) return false;
+      if (esRH) return true;
+      if (i.tipo_interaccion !== "Comentario") return true;
+      return (
+        i.estatus_moderacion === "Aprobado" ||
+        i.colaborador_id === sesion.userId
+      );
+    });
+
+    return {
+      ok: true,
+      currentUserId: sesion.userId,
+      esRecursosHumanos: esRH,
+      publicaciones: publicacionesFiltradas,
+      interacciones: interaccionesFiltradas,
+    };
+  } catch {
+    return {
+      ok: false,
+      error: "No fue posible cargar el Muro Corporativo.",
+      currentUserId: null,
+      esRecursosHumanos: false,
+      publicaciones: [],
+      interacciones: [],
+    };
+  }
+}
 
 export type EnviarComentarioMuroResult =
   | {
@@ -28,9 +143,19 @@ export async function enviarComentarioMuroAction(payload: {
   contenido: string;
 }): Promise<EnviarComentarioMuroResult> {
   try {
-    const limpio = payload.contenido.trim();
+    if (!verificarOrigenPermitido()) {
+      return { ok: false, error: "Origen de solicitud no autorizado." };
+    }
+
+    const limpio = (payload.contenido ?? "").trim();
     if (!limpio) {
       return { ok: false, error: "El comentario no puede estar vacío." };
+    }
+    if (limpio.length > 1000) {
+      return {
+        ok: false,
+        error: "El comentario excede la longitud máxima permitida (1,000 caracteres).",
+      };
     }
 
     const sesion = createSessionClient();
@@ -43,6 +168,18 @@ export async function enviarComentarioMuroAction(payload: {
       return {
         ok: false,
         error: "Inicia sesión para enviar un comentario.",
+      };
+    }
+
+    const controlTasa = verificarRateLimit(
+      `muro-comentario:${user.id}`,
+      6,
+      60 * 1000
+    );
+    if (!controlTasa.permitido) {
+      return {
+        ok: false,
+        error: "Estás enviando comentarios demasiado rápido. Espera unos segundos.",
       };
     }
 
@@ -81,7 +218,10 @@ export async function enviarComentarioMuroAction(payload: {
     if (!esConstraintUnico) {
       return {
         ok: false,
-        error: insertError?.message ?? "No se pudo registrar el comentario.",
+        error: sanitizarErrorPublico(
+          insertError,
+          "No se pudo registrar el comentario."
+        ),
       };
     }
 
@@ -99,10 +239,10 @@ export async function enviarComentarioMuroAction(payload: {
     if (findError || !existente?.id) {
       return {
         ok: false,
-        error:
-          findError?.message ??
-          insertError?.message ??
-          "No se encontró el comentario previo para actualizar.",
+        error: sanitizarErrorPublico(
+          findError ?? insertError,
+          "No se encontró el comentario previo para actualizar."
+        ),
       };
     }
 
@@ -120,7 +260,10 @@ export async function enviarComentarioMuroAction(payload: {
     if (updateError) {
       return {
         ok: false,
-        error: updateError.message,
+        error: sanitizarErrorPublico(
+          updateError,
+          "No se pudo actualizar el comentario."
+        ),
       };
     }
 
@@ -140,10 +283,10 @@ export async function enviarComentarioMuroAction(payload: {
   } catch (err) {
     return {
       ok: false,
-      error:
-        err instanceof Error
-          ? err.message
-          : "Error inesperado al enviar el comentario.",
+      error: sanitizarErrorPublico(
+        err,
+        "Error inesperado al enviar el comentario."
+      ),
     };
   }
 }
