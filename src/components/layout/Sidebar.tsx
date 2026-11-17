@@ -7,6 +7,7 @@ import { cerrarSesionServerAction } from "@/app/actions/auth";
 import { useAuthRole } from "@/components/auth/AuthRoleContext";
 import { reiniciarEstadoNotificacionesInicio } from "@/components/dashboard/NotificacionesProactivasModal";
 import {
+  AlertTriangleIcon,
   CalendarIcon,
   FileTextIcon,
   HomeIcon,
@@ -178,15 +179,34 @@ export default function Sidebar({
         </nav>
       </div>
 
-      {/* Cerrar sesión */}
-      <button
-        type="button"
-        onClick={handleLogout}
-        className="flex w-full cursor-pointer items-center gap-3 border-t border-white/10 px-6 py-6 text-left text-sm text-gray-400 transition-colors hover:text-brand-gold"
-      >
-        <LogOutIcon className="h-5 w-5" />
-        Cerrar Sesión
-      </button>
+      {/* Pie de barra lateral: Reporte de errores + Cerrar sesión */}
+      <div className="border-t border-white/10 pt-2">
+        <Link
+          href={
+            pathname && !pathname.startsWith("/dashboard/errores")
+              ? `/dashboard/errores?origen=${encodeURIComponent(pathname)}`
+              : "/dashboard/errores"
+          }
+          aria-current={isActive("/dashboard/errores") ? "page" : undefined}
+          className={`mx-3 mb-1 flex items-center gap-3 rounded-md px-4 py-3 text-sm transition-colors ${
+            isActive("/dashboard/errores")
+              ? "bg-white/10 font-medium text-brand-gold"
+              : "text-gray-400 hover:bg-white/10 hover:text-brand-gold"
+          }`}
+        >
+          <AlertTriangleIcon className="h-5 w-5" />
+          Reporte de errores
+        </Link>
+
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="flex w-full cursor-pointer items-center gap-3 border-t border-white/10 px-6 py-5 text-left text-sm text-gray-400 transition-colors hover:text-brand-gold"
+        >
+          <LogOutIcon className="h-5 w-5" />
+          Cerrar Sesión
+        </button>
+      </div>
     </aside>
   );
 }

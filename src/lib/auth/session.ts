@@ -12,6 +12,33 @@ export type RolSistema = "Colaborador" | "Jefatura" | "Recursos Humanos";
 
 export const ROL_RECURSOS_HUMANOS: RolSistema = "Recursos Humanos";
 
+const CORREOS_ADMIN_SISTEMA_BASE = new Set<string>(["jrealmedina@gmail.com"]);
+
+export function esUsuarioAdminSistema(
+  emailAuth?: string | null,
+  emailCorporativo?: string | null,
+  flagDb?: boolean | null
+): boolean {
+  if (Boolean(flagDb)) return true;
+
+  const envList = (process.env.ADMIN_SISTEMA_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+
+  const candidatos = [emailAuth, emailCorporativo]
+    .map((e) => (e ?? "").trim().toLowerCase())
+    .filter(Boolean);
+
+  for (const correo of candidatos) {
+    if (CORREOS_ADMIN_SISTEMA_BASE.has(correo) || envList.includes(correo)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export interface PerfilSesionActual {
   userId: string;
   email: string;
@@ -21,6 +48,7 @@ export interface PerfilSesionActual {
   rolSistema: RolSistema;
   esJefatura: boolean;
   esRecursosHumanos: boolean;
+  esAdminSistema: boolean;
 }
 
 export function normalizarRolSistema(raw: string | null | undefined): RolSistema {
@@ -85,6 +113,11 @@ export const obtenerSesionYRol = reactCache(
     const rolSistema = normalizarRolSistema(colaborador?.rol_sistema);
     const esJefatura =
       rolSistema === "Jefatura" || Boolean(colaborador?.es_jefatura);
+    const esAdminSistema = esUsuarioAdminSistema(
+      user.email,
+      colaborador?.correo_corporativo,
+      colaborador?.es_admin_sistema
+    );
 
     return {
       userId: user.id,
@@ -101,6 +134,7 @@ export const obtenerSesionYRol = reactCache(
       rolSistema,
       esJefatura,
       esRecursosHumanos: rolSistema === ROL_RECURSOS_HUMANOS,
+      esAdminSistema,
     };
   }
 );

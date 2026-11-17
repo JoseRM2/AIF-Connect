@@ -23,6 +23,7 @@ export interface Database {
           empresa?: string | null;
           rol_sistema: string | null;
           es_jefatura?: boolean | null;
+          es_admin_sistema?: boolean | null;
           rol?: "rh" | "colaborador";
           estatus: "Activo" | "Inactivo" | "activo" | "inactivo" | string;
           saldo_vacaciones: number | null;
@@ -83,6 +84,7 @@ export interface Database {
           empresa?: string | null;
           rol_sistema?: string | null;
           es_jefatura?: boolean | null;
+          es_admin_sistema?: boolean | null;
           rol?: "rh" | "colaborador";
           estatus?: "Activo" | "Inactivo" | "activo" | "inactivo" | string;
           saldo_vacaciones?: number | null;
@@ -143,6 +145,7 @@ export interface Database {
           empresa?: string | null;
           rol_sistema?: string | null;
           es_jefatura?: boolean | null;
+          es_admin_sistema?: boolean | null;
           rol?: "rh" | "colaborador";
           estatus?: "Activo" | "Inactivo" | "activo" | "inactivo" | string;
           saldo_vacaciones?: number | null;
@@ -612,6 +615,86 @@ export interface Database {
             columns: ["muro_publicacion_id"];
             isOneToOne: false;
             referencedRelation: "muro_publicaciones";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      reportes_errores: {
+        Row: {
+          id: string;
+          colaborador_id: string;
+          nombre_reportante: string;
+          correo_reportante: string;
+          rol_reportante: string;
+          empresa_reportante: string;
+          modulo: string;
+          ruta_origen: string | null;
+          severidad: "Baja" | "Media" | "Alta" | "Critica" | string;
+          categoria: string;
+          titulo: string;
+          descripcion: string;
+          pasos_reproducir: string | null;
+          captura_url: string | null;
+          navegador_info: string | null;
+          estatus: "Abierto" | "En_Revision" | "Resuelto" | "Descartado" | string;
+          notas_admin: string | null;
+          resuelto_por: string | null;
+          resuelto_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          colaborador_id: string;
+          nombre_reportante: string;
+          correo_reportante: string;
+          rol_reportante: string;
+          empresa_reportante?: string;
+          modulo: string;
+          ruta_origen?: string | null;
+          severidad?: "Baja" | "Media" | "Alta" | "Critica" | string;
+          categoria?: string;
+          titulo: string;
+          descripcion: string;
+          pasos_reproducir?: string | null;
+          captura_url?: string | null;
+          navegador_info?: string | null;
+          estatus?: "Abierto" | "En_Revision" | "Resuelto" | "Descartado" | string;
+          notas_admin?: string | null;
+          resuelto_por?: string | null;
+          resuelto_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          colaborador_id?: string;
+          nombre_reportante?: string;
+          correo_reportante?: string;
+          rol_reportante?: string;
+          empresa_reportante?: string;
+          modulo?: string;
+          ruta_origen?: string | null;
+          severidad?: "Baja" | "Media" | "Alta" | "Critica" | string;
+          categoria?: string;
+          titulo?: string;
+          descripcion?: string;
+          pasos_reproducir?: string | null;
+          captura_url?: string | null;
+          navegador_info?: string | null;
+          estatus?: "Abierto" | "En_Revision" | "Resuelto" | "Descartado" | string;
+          notas_admin?: string | null;
+          resuelto_por?: string | null;
+          resuelto_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "reportes_errores_colaborador_id_fkey";
+            columns: ["colaborador_id"];
+            isOneToOne: false;
+            referencedRelation: "colaboradores";
             referencedColumns: ["id"];
           }
         ];
