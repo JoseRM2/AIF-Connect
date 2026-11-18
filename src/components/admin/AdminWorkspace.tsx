@@ -222,13 +222,50 @@ function calcularSaldoVacacionesLft(
   return 28;
 }
 
+function extraerCorreoCorporativoUnico(
+  raw: string | null | undefined,
+  correosYaUsados?: Set<string>
+): string {
+  if (!raw) return "";
+  // Extraer todos los correos válidos cuando una celda trae varios separados por ';', ',', '/' o espacios
+  const coincidencias = raw.match(
+    /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g
+  );
+  if (!coincidencias || coincidencias.length === 0) {
+    return raw.split(/[;,/\s]+/)[0]?.trim().toLowerCase() ?? "";
+  }
+  const limpios = coincidencias.map((c) => c.trim().toLowerCase());
+
+  if (correosYaUsados) {
+    const disponibles = limpios.filter((c) => !correosYaUsados.has(c));
+    if (disponibles.length > 0) {
+      const dispAif = disponibles.find((c) => c.includes("@aif."));
+      return dispAif ?? disponibles[0]!;
+    }
+  }
+
+  // Priorizar el dominio corporativo @aif si vienen varios correos (ej. "rrhh2@tatuus.nl; rrhh2@aif.com.mx")
+  const preferidoAif = limpios.find((c) => c.includes("@aif."));
+  return preferidoAif ?? limpios[0]!;
+}
+
 function separarNombreCompleto(nombreCompleto: string): {
   nombre: string;
   apellidos: string;
 } {
-  const partes = nombreCompleto.trim().split(/\s+/).filter(Boolean);
+  const limpio = nombreCompleto.trim();
+  // Si viene en formato "Apellidos, Nombre" (ej. "Rodriguez Casillas, David Leonardo")
+  if (limpio.includes(",")) {
+    const [parteApellidos, ...restoNombre] = limpio.split(",");
+    return {
+      nombre: restoNombre.join(" ").trim() || limpio,
+      apellidos: (parteApellidos ?? "").trim(),
+    };
+  }
+
+  const partes = limpio.split(/\s+/).filter(Boolean);
   if (partes.length <= 1) {
-    return { nombre: nombreCompleto.trim(), apellidos: "" };
+    return { nombre: limpio, apellidos: "" };
   }
   if (partes.length === 2) {
     return { nombre: partes[0]!, apellidos: partes[1]! };
@@ -430,6 +467,7 @@ export default function AdminWorkspace({
       }
 
       const parseadas: FilaPreviaImportacion[] = [];
+      const correosUsadosEnLote = new Set<string>();
 
       filasJson.forEach((rawRow, idx) => {
         const mapaRow = new Map<string, unknown>();
@@ -454,10 +492,15 @@ export default function AdminWorkspace({
           limpiarTextoCelda(
             obtener("PERSONAL", "NOMBRE COMPLETO", "COLABORADOR", "NOMBRE")
           ) ?? "";
-        const correoRaw =
+        const correoRaw = extraerCorreoCorporativoUnico(
           limpiarTextoCelda(
             obtener("CORREO", "CORREO CORPORATIVO", "EMAIL")
-          ) ?? "";
+          ),
+          correosUsadosEnLote
+        );
+        if (correoRaw) {
+          correosUsadosEnLote.add(correoRaw);
+        }
 
         if (!nombreCompleto && !correoRaw) {
           return;
@@ -549,9 +592,11 @@ export default function AdminWorkspace({
           obtener("TELEFONO PERSONAL")
         );
         const correoPersonal =
-          limpiarTextoCelda(
-            obtener("CORREO ELECTRONICO PERSONAL", "CORREO PERSONAL")
-          )?.toLowerCase() ?? null;
+          extraerCorreoCorporativoUnico(
+            limpiarTextoCelda(
+              obtener("CORREO ELECTRONICO PERSONAL", "CORREO PERSONAL")
+            )
+          ) || null;
         const domicilioCompleto = limpiarTextoCelda(
           obtener("DOMICILIO", "DOMICILIO COMPLETO")
         );
@@ -769,8 +814,10 @@ export default function AdminWorkspace({
       "#": r.filaIndice,
       "Nombre Completo": r.nombreCompleto,
       "Correo Corporativo (Usuario)": r.correoCorporativo,
-      "Contraseña Generada":
-        r.contrasenaGenerada ?? "(Cuenta previa en Auth - conserva su contraseña)",
+      "Contraseña Generada": !r.ok
+        ? "— (No se creó por error)"
+        : r.contrasenaGenerada ??
+          "(Cuenta previa en Auth - conserva su contraseña)",
       "Empresa": r.empresa,
       "Rol Sistema": r.rolSistema,
       "Departamento": r.departamento,
@@ -1603,10 +1650,16 @@ export default function AdminWorkspace({
                           {r.correoCorporativo}
                         </td>
                         <td className="p-2.5 font-mono text-xs font-bold text-brand-dark">
-                          {r.contrasenaGenerada ?? (
-                            <span className="font-sans text-[11px] font-normal text-gray-500">
-                              Cuenta existente en Auth (conserva su contraseña)
+                          {!r.ok ? (
+                            <span className="font-sans text-[11px] font-normal text-gray-400">
+                              —
                             </span>
+                          ) : (
+                            r.contrasenaGenerada ?? (
+                              <span className="font-sans text-[11px] font-normal text-gray-500">
+                                Cuenta existente en Auth (conserva su contraseña)
+                              </span>
+                            )
                           )}
                         </td>
                         <td className="p-2.5 text-[11px] text-gray-700">

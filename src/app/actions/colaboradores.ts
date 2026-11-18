@@ -349,9 +349,50 @@ function normalizarNombreBusqueda(valor: string | null | undefined): string {
   return (valor ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/,/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function clavesBusquedaNombre(valor: string | null | undefined): string[] {
+  const raw = (valor ?? "").trim();
+  if (!raw) return [];
+  const claves = new Set<string>();
+  const base = normalizarNombreBusqueda(raw);
+  if (base) claves.add(base);
+
+  if (raw.includes(",")) {
+    const [apellidos, ...resto] = raw.split(",");
+    const invertido = normalizarNombreBusqueda(
+      `${resto.join(" ")} ${apellidos ?? ""}`
+    );
+    if (invertido) claves.add(invertido);
+  }
+  return Array.from(claves);
+}
+
+function sanitizarCorreoUnicoServidor(
+  raw: string | null | undefined,
+  correosUsadosLote?: Set<string>
+): string {
+  if (!raw) return "";
+  const coincidencias = raw.match(
+    /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g
+  );
+  if (!coincidencias || coincidencias.length === 0) {
+    return raw.split(/[;,/\s]+/)[0]?.trim().toLowerCase() ?? "";
+  }
+  const limpios = coincidencias.map((c) => c.trim().toLowerCase());
+  if (correosUsadosLote) {
+    const disponibles = limpios.filter((c) => !correosUsadosLote.has(c));
+    if (disponibles.length > 0) {
+      const dispAif = disponibles.find((c) => c.includes("@aif."));
+      return dispAif ?? disponibles[0]!;
+    }
+  }
+  const preferidoAif = limpios.find((c) => c.includes("@aif."));
+  return preferidoAif ?? limpios[0]!;
 }
 
 /**
@@ -435,12 +476,19 @@ export async function importarColaboradoresMasivoAdminAction(
       id: string;
       jefeTexto: string;
     }> = [];
+    const correosAsignadosEnLote = new Set<string>();
 
     // PASADA 1: Crear cuenta en Auth + Insertar/Actualizar en `public.colaboradores`
     for (let i = 0; i < filas.length; i++) {
       const fila = filas[i];
       const nombreCompleto = (fila.nombre_completo ?? "").trim();
-      const correo = (fila.correo_corporativo ?? "").trim().toLowerCase();
+      const correo = sanitizarCorreoUnicoServidor(
+        fila.correo_corporativo,
+        correosAsignadosEnLote
+      );
+      if (correo) {
+        correosAsignadosEnLote.add(correo);
+      }
       const empresaNorm =
         (fila.empresa ?? "AIF").trim().toUpperCase() === "ROYAL"
           ? "ROYAL"
@@ -582,15 +630,15 @@ export async function importarColaboradoresMasivoAdminAction(
 
       const mapaPorNombre = new Map<string, string>();
       for (const c of todosColabs ?? []) {
-        const clave = normalizarNombreBusqueda(c.nombre_completo);
-        if (clave) {
+        for (const clave of clavesBusquedaNombre(c.nombre_completo)) {
           mapaPorNombre.set(clave, c.id);
         }
       }
 
       for (const item of idsProcesadosConJefeTexto) {
-        const claveJefe = normalizarNombreBusqueda(item.jefeTexto);
-        const jefeUuid = mapaPorNombre.get(claveJefe);
+        const clavesJefe = clavesBusquedaNombre(item.jefeTexto);
+        const jefeUuid =
+          clavesJefe.map((k) => mapaPorNombre.get(k)).find(Boolean) ?? null;
         if (jefeUuid && jefeUuid !== item.id) {
           const { error: linkErr } = await supabaseAdmin
             .from("colaboradores")
