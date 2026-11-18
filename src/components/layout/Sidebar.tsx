@@ -16,6 +16,7 @@ import {
   MapPinIcon,
   NewspaperIcon,
   SettingsIcon,
+  SlidersIcon,
 } from "@/components/ui/icons";
 import type { RolSistema } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/client";
@@ -54,18 +55,24 @@ const NAV_ITEMS_RH: NavItem[] = [
 export default function Sidebar({
   rolSistema,
   esJefatura: esJefaturaProp,
+  esAdminSistema: esAdminSistemaProp,
 }: {
   rolSistema?: RolSistema;
   esJefatura?: boolean;
+  esAdminSistema?: boolean;
 }) {
   const pathname = usePathname();
-  const { rolSistema: rolContexto, esJefatura: esJefaturaContexto } =
-    useAuthRole();
+  const {
+    rolSistema: rolContexto,
+    esJefatura: esJefaturaContexto,
+    esAdminSistema: esAdminSistemaContexto,
+  } = useAuthRole();
 
   const rolActual: RolSistema = rolSistema ?? rolContexto;
   const tienePersonalACargo =
     rolActual === "Jefatura" || Boolean(esJefaturaProp ?? esJefaturaContexto);
   const esRecursosHumanos = rolActual === "Recursos Humanos";
+  const esAdminSistema = Boolean(esAdminSistemaProp ?? esAdminSistemaContexto);
 
   const isActive = (href: string) =>
     href === "/dashboard" ? pathname === href : pathname.startsWith(href);
@@ -179,8 +186,23 @@ export default function Sidebar({
         </nav>
       </div>
 
-      {/* Pie de barra lateral: Reporte de errores + Cerrar sesión */}
+      {/* Pie de barra lateral: Admin (solo Administrador del Sistema) + Reporte de errores + Cerrar sesión */}
       <div className="border-t border-white/10 pt-2">
+        {esAdminSistema && (
+          <Link
+            href="/dashboard/admin"
+            aria-current={isActive("/dashboard/admin") ? "page" : undefined}
+            className={`mx-3 mb-1 flex items-center gap-3 rounded-md px-4 py-3 text-sm transition-colors ${
+              isActive("/dashboard/admin")
+                ? "bg-white/10 font-medium text-brand-gold"
+                : "text-gray-400 hover:bg-white/10 hover:text-brand-gold"
+            }`}
+          >
+            <SlidersIcon className="h-5 w-5" />
+            Admin
+          </Link>
+        )}
+
         <Link
           href={
             pathname && !pathname.startsWith("/dashboard/errores")

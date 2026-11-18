@@ -3,12 +3,14 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
   esCuentaColaboradorActiva,
+  esUsuarioAdminSistema,
   normalizarRolSistema,
 } from "@/lib/auth/session";
 import type { Database } from "@/types/supabase";
 
 const PROTECTED_PREFIXES = ["/dashboard", "/rh", "/zonas", "/muro"];
 const RH_ONLY_PREFIXES = ["/dashboard/rh", "/dashboard/zonas", "/rh", "/zonas"];
+const ADMIN_ONLY_PREFIXES = ["/dashboard/admin"];
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -67,18 +69,21 @@ export async function middleware(request: NextRequest) {
   const isRhOnlyRoute = RH_ONLY_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
+  const isAdminOnlyRoute = ADMIN_ONLY_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
 
-  if (user && (isProtectedRoute || isRhOnlyRoute)) {
+  if (user && (isProtectedRoute || isRhOnlyRoute || isAdminOnlyRoute)) {
     let { data: colaborador } = await supabase
       .from("colaboradores")
-      .select("rol_sistema, estatus")
+      .select("rol_sistema, estatus, correo_corporativo")
       .eq("id", user.id)
       .maybeSingle();
 
     if (!colaborador && user.email) {
       const { data: colabPorCorreo } = await supabase
         .from("colaboradores")
-        .select("rol_sistema, estatus")
+        .select("rol_sistema, estatus, correo_corporativo")
         .ilike("correo_corporativo", user.email.trim())
         .maybeSingle();
       colaborador = colabPorCorreo ?? null;
@@ -90,6 +95,18 @@ export async function middleware(request: NextRequest) {
       const loginUrl = request.nextUrl.clone();
       loginUrl.pathname = "/login";
       return NextResponse.redirect(loginUrl);
+    }
+
+    if (isAdminOnlyRoute) {
+      const esAdmin = esUsuarioAdminSistema(
+        user.email,
+        colaborador?.correo_corporativo
+      );
+      if (!esAdmin) {
+        const homeUrl = request.nextUrl.clone();
+        homeUrl.pathname = "/dashboard";
+        return NextResponse.redirect(homeUrl);
+      }
     }
 
     if (isRhOnlyRoute) {

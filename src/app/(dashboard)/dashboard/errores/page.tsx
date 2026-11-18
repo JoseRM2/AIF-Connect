@@ -19,9 +19,7 @@ export default async function ReporteErroresPage() {
         }
       >
         <ReporteErroresWorkspace
-          esAdminSistemaInicial={datos.esAdminSistema}
           misReportesIniciales={datos.misReportes}
-          todosLosReportesIniciales={datos.todosLosReportes}
           errorInicial={datos.ok ? undefined : datos.error}
         />
       </Suspense>

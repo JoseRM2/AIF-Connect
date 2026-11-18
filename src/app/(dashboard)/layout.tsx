@@ -19,6 +19,7 @@ export default async function DashboardLayout({
         <Sidebar
           rolSistema={perfil.rolSistema}
           esJefatura={perfil.esJefatura}
+          esAdminSistema={perfil.esAdminSistema}
         />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
