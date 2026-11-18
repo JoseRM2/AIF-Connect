@@ -13,9 +13,11 @@ import {
   ChevronRightIcon,
   FileTextIcon,
   MessageSquareIcon,
+  NewspaperIcon,
   TicketIcon,
 } from "@/components/ui/icons";
 import type { RolSistema } from "@/lib/auth/session";
+import { cumpleFiltroAudiencia } from "@/lib/muro";
 import { createClient } from "@/lib/supabase/client";
 
 export type { NotificacionPendienteItem };
@@ -222,14 +224,6 @@ export default function NotificacionesProactivasModal({
         }
 
         // 2. Respaldo cliente directo a Supabase si el Server Action no respondió
-        if (!tieneJefatura && !esRecursosHumanos) {
-          if (!cancelado) {
-            setNotificaciones([]);
-            setCargando(false);
-          }
-          return;
-        }
-
         const supabase = createClient();
         const itemsAcumulados: NotificacionPendienteItem[] = [];
 
@@ -239,6 +233,62 @@ export default function NotificacionesProactivasModal({
             data: { user },
           } = await supabase.auth.getUser();
           currentUserId = user?.id ?? null;
+        }
+
+        if (currentUserId) {
+          const [pubsAcuseRes, misAcusesRes] = await Promise.all([
+            supabase
+              .from("muro_publicaciones")
+              .select(
+                "id, titulo, requiere_acuse, fecha_publicacion, empresa_destino, departamento_destino"
+              )
+              .eq("requiere_acuse", true)
+              .order("fecha_publicacion", { ascending: false }),
+            supabase
+              .from("muro_interacciones")
+              .select("publicacion_id")
+              .eq("colaborador_id", currentUserId)
+              .eq("tipo_interaccion", "Acuse_Recibo"),
+          ]);
+
+          const idsConAcuse = new Set(
+            (misAcusesRes.data ?? []).map((a) => String(a.publicacion_id ?? ""))
+          );
+          const ahoraMs = Date.now();
+
+          for (const pub of pubsAcuseRes.data ?? []) {
+            if (!pub.id || idsConAcuse.has(pub.id)) continue;
+            const fechaMs = pub.fecha_publicacion
+              ? new Date(pub.fecha_publicacion).getTime()
+              : 0;
+            if (fechaMs > ahoraMs) continue;
+            if (
+              !cumpleFiltroAudiencia(
+                pub,
+                contexto.empresa,
+                contexto.departamento
+              )
+            ) {
+              continue;
+            }
+
+            itemsAcumulados.push({
+              id: `acuse-muro-${pub.id}`,
+              categoria: "acuse_muro",
+              etiqueta: "MURO CORPORATIVO • LECTURA OBLIGATORIA",
+              titulo: "Nueva publicación requiere acuse de recibido",
+              detalle: pub.titulo || "Comunicado Oficial",
+              href: `/dashboard/muro?publicacion=${pub.id}#publicacion-${pub.id}`,
+            });
+          }
+        }
+
+        if (!tieneJefatura && !esRecursosHumanos) {
+          if (!cancelado) {
+            setNotificaciones(itemsAcumulados);
+            setCargando(false);
+          }
+          return;
         }
 
         if (tieneJefatura && currentUserId) {
@@ -373,7 +423,14 @@ export default function NotificacionesProactivasModal({
     return () => {
       cancelado = true;
     };
-  }, [esRecursosHumanos, tieneIniciales, tieneJefatura, userId]);
+  }, [
+    contexto.departamento,
+    contexto.empresa,
+    esRecursosHumanos,
+    tieneIniciales,
+    tieneJefatura,
+    userId,
+  ]);
 
   const handleCerrarPorBoton = useCallback(() => {
     cerradoPorBotonEnSesion = true;
@@ -426,6 +483,9 @@ export default function NotificacionesProactivasModal({
   const renderIconoCategoria = (
     categoria: NotificacionPendienteItem["categoria"]
   ) => {
+    if (categoria === "acuse_muro") {
+      return <NewspaperIcon className="h-4 w-4 text-brand-gold" />;
+    }
     if (categoria === "comentario_muro") {
       return <MessageSquareIcon className="h-4 w-4 text-brand-gold" />;
     }

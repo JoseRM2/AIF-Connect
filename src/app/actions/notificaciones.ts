@@ -1,12 +1,14 @@
 "use server";
 
 import { normalizarRolSistema } from "@/lib/auth/session";
+import { cumpleFiltroAudiencia } from "@/lib/muro";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 
 export interface NotificacionPendienteItem {
   id: string;
   categoria:
+    | "acuse_muro"
     | "solicitud_jefatura"
     | "solicitud_rh"
     | "comentario_muro"
@@ -159,17 +161,77 @@ export async function obtenerNotificacionesPendientesAction(): Promise<ObtenerNo
       rolSistema === "Jefatura" || Boolean(perfilActual?.es_jefatura);
     const esRecursosHumanos = rolSistema === "Recursos Humanos";
 
+    const userEmpresa =
+      String(perfilActual?.empresa ?? "AIF").trim() || "AIF";
+    const userDepartamento =
+      String(
+        perfilActual?.departamento ?? perfilActual?.area ?? "Todos"
+      ).trim() || "Todos";
+
+    const itemsAcumulados: NotificacionPendienteItem[] = [];
+
+    // 1.B Consultar comunicados con `requiere_acuse = true` y los acuses ya registrados por este usuario (aplica a TODOS los usuarios)
+    const [publicacionesAcuseRes, misAcusesRes] = await Promise.all([
+      db
+        .from("muro_publicaciones")
+        .select(
+          "id, titulo, requiere_acuse, fecha_publicacion, created_at, empresa_destino, departamento_destino"
+        )
+        .eq("requiere_acuse", true)
+        .order("fecha_publicacion", { ascending: false }),
+      db
+        .from("muro_interacciones")
+        .select("publicacion_id")
+        .eq("colaborador_id", user.id)
+        .eq("tipo_interaccion", "Acuse_Recibo"),
+    ]);
+
+    const idsPublicacionesConMiAcuse = new Set<string>(
+      (misAcusesRes.data ?? []).map((a) => String(a.publicacion_id ?? ""))
+    );
+    const ahoraMs = Date.now();
+
+    for (const pub of publicacionesAcuseRes.data ?? []) {
+      const pubId = String(pub.id ?? "");
+      if (!pubId || idsPublicacionesConMiAcuse.has(pubId)) continue;
+
+      const fechaPubMs = pub.fecha_publicacion
+        ? new Date(pub.fecha_publicacion).getTime()
+        : 0;
+      if (fechaPubMs > ahoraMs) continue;
+
+      if (
+        !cumpleFiltroAudiencia(
+          {
+            empresa_destino: pub.empresa_destino,
+            departamento_destino: pub.departamento_destino,
+          },
+          userEmpresa,
+          userDepartamento
+        )
+      ) {
+        continue;
+      }
+
+      itemsAcumulados.push({
+        id: `acuse-muro-${pubId}`,
+        categoria: "acuse_muro",
+        etiqueta: "MURO CORPORATIVO • LECTURA OBLIGATORIA",
+        titulo: "Nueva publicación requiere acuse de recibido",
+        detalle: String(pub.titulo ?? "Comunicado Oficial"),
+        href: `/dashboard/muro?publicacion=${pubId}#publicacion-${pubId}`,
+      });
+    }
+
     if (!tieneJefatura && !esRecursosHumanos) {
       return {
         ok: true,
         userId: user.id,
         rolSistema,
         esJefatura: tieneJefatura,
-        notificaciones: [],
+        notificaciones: itemsAcumulados,
       };
     }
-
-    const itemsAcumulados: NotificacionPendienteItem[] = [];
 
     // 2. Consultas en paralelo de colaboradores y las tablas necesarias (solo para Jefatura / RH)
     const [
