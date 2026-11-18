@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import {
+  actualizarPublicacionMuroAction,
+  eliminarPublicacionMuroAction,
+} from "@/app/actions/muro";
+import {
   AlertTriangleIcon,
   CheckCircleIcon,
+  PencilIcon,
+  TrashIcon,
 } from "@/components/ui/icons";
 import {
   extraerUrlsImagenes,
@@ -143,6 +149,17 @@ export default function ComunicadosTab() {
   const [acusesModalList, setAcusesModalList] = useState<AcuseReciboRow[]>([]);
   const [isLoadingAcuses, setIsLoadingAcuses] = useState(false);
   const [errorAcuses, setErrorAcuses] = useState<string | null>(null);
+
+  // Estado de Edición y Eliminación de Comunicados Publicados
+  const [publicacionEditando, setPublicacionEditando] =
+    useState<PublicacionMuroRow | null>(null);
+  const [urlsExistentesEdicion, setUrlsExistentesEdicion] = useState<string[]>(
+    []
+  );
+  const [publicacionAEliminar, setPublicacionAEliminar] =
+    useState<PublicacionMuroRow | null>(null);
+  const [eliminandoId, setEliminandoId] = useState<string | null>(null);
+  const formularioRef = useRef<HTMLElement | null>(null);
 
   // Mapa rápido id -> título de publicación
   const mapaTitulosPublicaciones = useMemo(() => {
@@ -371,6 +388,76 @@ export default function ComunicadosTab() {
     }
   };
 
+  const handleCancelarEdicion = () => {
+    setPublicacionEditando(null);
+    setUrlsExistentesEdicion([]);
+    setTitulo("");
+    setContenido("");
+    setEmpresaDestino("Ambas");
+    setDepartamentoDestino("Todos");
+    setFechaProgramada("");
+    setRequiereAcuse(false);
+    limpiarArchivoSeleccionado();
+    setMensajeError(null);
+  };
+
+  const handleIniciarEdicionPublicacion = (pub: PublicacionMuroRow) => {
+    setMensajeExito(null);
+    setMensajeError(null);
+    limpiarArchivoSeleccionado();
+    setPublicacionEditando(pub);
+    setTitulo(pub.titulo ?? "");
+    setContenido(pub.contenido ?? "");
+    const empRaw = (pub.empresa_destino ?? "Ambas").trim();
+    setEmpresaDestino(
+      empRaw === "AIF" ? "AIF" : empRaw === "ROYAL" ? "ROYAL" : "Ambas"
+    );
+    setDepartamentoDestino((pub.departamento_destino ?? "Todos").trim() || "Todos");
+    setRequiereAcuse(Boolean(pub.requiere_acuse));
+    setUrlsExistentesEdicion(extraerUrlsImagenes(pub.imagen_url));
+
+    if (pub.fecha_publicacion) {
+      const d = new Date(pub.fecha_publicacion);
+      if (!Number.isNaN(d.getTime())) {
+        const localIso = new Date(
+          d.getTime() - d.getTimezoneOffset() * 60000
+        )
+          .toISOString()
+          .slice(0, 16);
+        setFechaProgramada(localIso);
+      } else {
+        setFechaProgramada("");
+      }
+    } else {
+      setFechaProgramada("");
+    }
+
+    formularioRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleConfirmarEliminarPublicacion = async () => {
+    if (!publicacionAEliminar || eliminandoId) return;
+    const idTarget = publicacionAEliminar.id;
+    setEliminandoId(idTarget);
+    setMensajeError(null);
+
+    try {
+      const res = await eliminarPublicacionMuroAction(idTarget);
+      if (!res.ok) {
+        setMensajeError(res.error || "No se pudo eliminar la publicación.");
+        return;
+      }
+
+      setPublicaciones((prev) => prev.filter((p) => p.id !== idTarget));
+      if (publicacionEditando?.id === idTarget) {
+        handleCancelarEdicion();
+      }
+      setPublicacionAEliminar(null);
+    } finally {
+      setEliminandoId(null);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const tituloLimpio = titulo.trim();
@@ -492,13 +579,64 @@ export default function ComunicadosTab() {
           .map((r) => r.url);
       }
 
-      const imagenUrlPublica = serializarUrlsImagenes(urlsPublicasOrdenadas);
+      const todasLasUrls = [
+        ...urlsExistentesEdicion,
+        ...urlsPublicasOrdenadas,
+      ];
+      const imagenUrlPublica = serializarUrlsImagenes(todasLasUrls);
 
       setEtapaEnvio("saving");
 
       const fechaPublicacionIso = fechaProgramada.trim()
         ? new Date(fechaProgramada).toISOString()
-        : new Date().toISOString();
+        : publicacionEditando?.fecha_publicacion ?? new Date().toISOString();
+
+      if (publicacionEditando) {
+        const resUpdate = await actualizarPublicacionMuroAction({
+          id: publicacionEditando.id,
+          titulo: tituloLimpio,
+          contenido: contenidoLimpio,
+          empresa_destino: empresaDestino,
+          departamento_destino: departamentoDestino,
+          fecha_publicacion: fechaPublicacionIso,
+          requiere_acuse: requiereAcuse,
+          imagen_url: imagenUrlPublica,
+        });
+
+        if (!resUpdate.ok) {
+          const msgErr =
+            resUpdate.error || "No se pudo actualizar el comunicado.";
+          setMensajeError(msgErr);
+          return;
+        }
+
+        const actualizadaRow: PublicacionMuroRow = resUpdate.publicacion
+          ? (resUpdate.publicacion as unknown as PublicacionMuroRow)
+          : {
+              ...publicacionEditando,
+              titulo: tituloLimpio,
+              contenido: contenidoLimpio,
+              empresa_destino: empresaDestino,
+              departamento_destino: departamentoDestino,
+              fecha_publicacion: fechaPublicacionIso,
+              requiere_acuse: requiereAcuse,
+              imagen_url: imagenUrlPublica,
+            };
+
+        setPublicaciones((prev) =>
+          prev
+            .map((p) => (p.id === actualizadaRow.id ? actualizadaRow : p))
+            .sort((a, b) => {
+              const fA = obtenerFechaPublicacion(a) ?? "";
+              const fB = obtenerFechaPublicacion(b) ?? "";
+              return fB.localeCompare(fA);
+            })
+        );
+
+        handleCancelarEdicion();
+        setMensajeExito(`${tituloLimpio} (Actualizado)`);
+        return;
+      }
 
       const { data: insertada, error: insertError } = await supabase
         .from("muro_publicaciones")
@@ -638,13 +776,19 @@ export default function ComunicadosTab() {
   };
 
   const obtenerTextoBotonSubmit = (): string => {
-    if (!isSubmitting) return "PUBLICAR COMUNICADO";
+    if (!isSubmitting) {
+      return publicacionEditando
+        ? "GUARDAR CAMBIOS DEL COMUNICADO"
+        : "PUBLICAR COMUNICADO";
+    }
     if (etapaEnvio === "uploading") {
       return imagenesSeleccionadas.length > 1
         ? `SUBIENDO ${imagenesSeleccionadas.length} IMÁGENES…`
         : "SUBIENDO IMAGEN…";
     }
-    return "PUBLICANDO COMUNICADO…";
+    return publicacionEditando
+      ? "GUARDANDO CAMBIOS…"
+      : "PUBLICANDO COMUNICADO…";
   };
 
   return (
@@ -685,20 +829,41 @@ export default function ComunicadosTab() {
         </div>
       )}
 
-      {/* ACCIÓN 1: Formulario Superior de Creación de Comunicados */}
-      <section className="rounded-sm border border-gray-100 bg-brand-surface p-6 shadow-sm">
+      {/* ACCIÓN 1: Formulario Superior de Creación / Edición de Comunicados */}
+      <section
+        ref={formularioRef}
+        className={`rounded-sm border bg-brand-surface p-6 shadow-sm ${
+          publicacionEditando
+            ? "border-brand-gold ring-2 ring-brand-gold/40"
+            : "border-gray-100"
+        }`}
+      >
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-4">
           <div>
             <span className="text-[9px] font-bold uppercase tracking-widest text-brand-gold">
               COMUNICACIÓN INTERNA · RECURSOS HUMANOS
             </span>
             <h2 className="mt-0.5 text-sm font-black text-gray-900">
-              Redactar Nuevo Comunicado Institucional
+              {publicacionEditando
+                ? `Editando Comunicado: "${publicacionEditando.titulo}"`
+                : "Redactar Nuevo Comunicado Institucional"}
             </h2>
           </div>
-          <span className="rounded-sm bg-brand-beige px-2.5 py-1 text-[9px] font-bold uppercase tracking-widest text-gray-600">
-            MURO CORPORATIVO
-          </span>
+          <div className="flex items-center gap-2">
+            {publicacionEditando && (
+              <button
+                type="button"
+                onClick={handleCancelarEdicion}
+                disabled={isSubmitting}
+                className="rounded-sm border border-gray-300 bg-brand-surface px-3 py-1 text-[9px] font-bold uppercase tracking-widest text-gray-700 transition-colors hover:bg-gray-100"
+              >
+                ✕ CANCELAR EDICIÓN
+              </button>
+            )}
+            <span className="rounded-sm bg-brand-beige px-2.5 py-1 text-[9px] font-bold uppercase tracking-widest text-gray-600">
+              {publicacionEditando ? "MODO EDICIÓN" : "MURO CORPORATIVO"}
+            </span>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="mt-5 flex flex-col gap-4">
@@ -871,6 +1036,59 @@ export default function ComunicadosTab() {
               </span>
             </div>
           </div>
+
+          {/* Imágenes ya publicadas cuando se está editando un comunicado */}
+          {publicacionEditando && urlsExistentesEdicion.length > 0 && (
+            <div className="rounded-sm border border-brand-gold/40 bg-brand-beige/25 p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-[9px] font-bold uppercase tracking-widest text-brand-dark">
+                    IMÁGENES ACTUALES DEL COMUNICADO ({urlsExistentesEdicion.length})
+                  </span>
+                  <p className="text-[10px] text-gray-500">
+                    Puedes quitar alguna imagen actual con (✕) o adjuntar nuevas imágenes arriba.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setUrlsExistentesEdicion([])}
+                  className="text-[9px] font-bold uppercase tracking-wider text-status-danger hover:underline"
+                >
+                  Quitar todas las actuales
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                {urlsExistentesEdicion.map((urlImg, idxImg) => (
+                  <div
+                    key={`edit-img-${idxImg}`}
+                    className="relative aspect-[4/3] w-full overflow-hidden rounded-md border border-gray-200 bg-neutral-100"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={urlImg}
+                      alt={`Imagen actual ${idxImg + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                    <span className="absolute left-2 top-2 rounded-sm bg-brand-dark/90 px-2 py-0.5 text-[9px] font-bold text-brand-gold">
+                      #{idxImg + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setUrlsExistentesEdicion((prev) =>
+                          prev.filter((_, i) => i !== idxImg)
+                        )
+                      }
+                      title="Quitar imagen"
+                      className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-[11px] font-bold text-white transition-colors hover:bg-status-danger"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Galería de previsualización y ordenamiento de imágenes seleccionadas */}
           {imagenesSeleccionadas.length > 0 && (
@@ -1296,22 +1514,42 @@ export default function ComunicadosTab() {
                     )}
                   </div>
 
-                  {/* Pie de tarjeta con botón "Ver Acuses" */}
-                  <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3.5">
+                  {/* Pie de tarjeta con botones "Editar", "Eliminar" y "Ver Acuses" */}
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3.5">
                     <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400">
                       {pub.requiere_acuse
                         ? "SEGUIMIENTO DE LECTURA OBLIGATORIA"
                         : "LECTURA INFORMATIVA"}
                     </span>
 
-                    <button
-                      type="button"
-                      onClick={() => handleAbrirVisorAcuses(pub)}
-                      className="inline-flex items-center gap-1.5 rounded-sm border border-brand-dark bg-brand-surface px-3.5 py-1.5 text-[9px] font-bold uppercase tracking-widest text-brand-dark transition-colors hover:bg-brand-dark hover:text-brand-gold"
-                    >
-                      <CheckCircleIcon className="h-3.5 w-3.5" />
-                      VER ACUSES
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleIniciarEdicionPublicacion(pub)}
+                        className="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 bg-brand-surface px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-gray-700 transition-colors hover:border-brand-dark hover:bg-brand-beige/40 hover:text-brand-dark"
+                      >
+                        <PencilIcon className="h-3.5 w-3.5" />
+                        EDITAR
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setPublicacionAEliminar(pub)}
+                        className="inline-flex items-center gap-1.5 rounded-sm border border-status-danger/35 bg-brand-surface px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-status-danger transition-colors hover:bg-status-danger/10"
+                      >
+                        <TrashIcon className="h-3.5 w-3.5" />
+                        ELIMINAR
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleAbrirVisorAcuses(pub)}
+                        className="inline-flex items-center gap-1.5 rounded-sm border border-brand-dark bg-brand-surface px-3.5 py-1.5 text-[9px] font-bold uppercase tracking-widest text-brand-dark transition-colors hover:bg-brand-dark hover:text-brand-gold"
+                      >
+                        <CheckCircleIcon className="h-3.5 w-3.5" />
+                        VER ACUSES
+                      </button>
+                    </div>
                   </div>
                 </article>
               );
@@ -1319,6 +1557,62 @@ export default function ComunicadosTab() {
           </div>
         )}
       </section>
+
+      {/* Modal de Confirmación para Eliminar Comunicado */}
+      {publicacionAEliminar && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirmar eliminación de comunicado"
+          onClick={() => !eliminandoId && setPublicacionAEliminar(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex w-full max-w-md flex-col overflow-hidden rounded-sm bg-brand-surface shadow-2xl"
+          >
+            <header className="border-b border-gray-100 bg-brand-dark px-6 py-4 text-white">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-brand-gold">
+                CONFIRMACIÓN DE SEGURIDAD
+              </span>
+              <h3 className="mt-1 font-serif text-base font-bold text-white">
+                ¿Eliminar comunicado del Muro Corporativo?
+              </h3>
+            </header>
+
+            <div className="flex flex-col gap-3 p-6 text-xs text-gray-700">
+              <p>
+                Estás a punto de eliminar permanentemente el comunicado:
+              </p>
+              <div className="rounded-sm border border-gray-200 bg-brand-beige/30 p-3 font-bold text-gray-900">
+                &ldquo;{publicacionAEliminar.titulo}&rdquo;
+              </div>
+              <p className="text-[11px] text-gray-500">
+                Esta acción también eliminará sus reacciones, comentarios y acuses de recibo asociados.
+              </p>
+            </div>
+
+            <footer className="flex items-center justify-end gap-2.5 border-t border-gray-100 bg-brand-beige/20 px-6 py-3.5">
+              <button
+                type="button"
+                disabled={Boolean(eliminandoId)}
+                onClick={() => setPublicacionAEliminar(null)}
+                className="rounded-sm border border-gray-300 bg-brand-surface px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50"
+              >
+                CANCELAR
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(eliminandoId)}
+                onClick={handleConfirmarEliminarPublicacion}
+                className="rounded-sm bg-status-danger px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-white transition-colors hover:bg-status-danger/90 disabled:opacity-50"
+              >
+                {eliminandoId ? "ELIMINANDO…" : "SÍ, ELIMINAR COMUNICADO"}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Visor de Acuses de Recibo por Publicación */}
       {publicacionAcusesActiva && (

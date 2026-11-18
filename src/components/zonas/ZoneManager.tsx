@@ -88,11 +88,16 @@ function construirZonasDesdeColaboradores(
   filas: ColaboradorDbRow[]
 ): Zona[] {
   const resultado: Zona[] = [];
-  const sedesVistas = new Set<string>();
+  const mapaSedes = new Map<string, Zona>();
 
   filas.forEach((colab) => {
     const empColab = normalizarEmpresaZona(colab.empresa);
     const items = extraerArregloZonasJson(colab.zonas_geocerca);
+    const colabInfo: ColaboradorAsignado = {
+      id: colab.id,
+      nombre: colab.nombre_completo || "Colaborador",
+      puesto: colab.puesto || "Colaborador",
+    };
 
     items.forEach((item, index) => {
       const lat = parseNumero(item.lat) ?? parseNumero(item.latitud);
@@ -131,10 +136,21 @@ function construirZonasDesdeColaboradores(
 
       if (tipo === "oficina") {
         const claveSede = `${idZona}|${titulo.toLowerCase()}|${lat.toFixed(4)}|${lng.toFixed(4)}`;
-        if (sedesVistas.has(claveSede)) return;
-        sedesVistas.add(claveSede);
+        const existente = mapaSedes.get(claveSede);
+        if (existente) {
+          const listaActual = existente.colaboradoresAsignados ?? [];
+          if (!listaActual.some((c) => c.id === colabInfo.id)) {
+            existente.colaboradoresAsignados = [...listaActual, colabInfo];
+          }
+          existente.colaborador =
+            existente.colaboradoresAsignados &&
+            existente.colaboradoresAsignados.length === 1
+              ? existente.colaboradoresAsignados[0]!
+              : null;
+          return;
+        }
 
-        resultado.push({
+        const nuevaSede: Zona = {
           id: idZona,
           titulo,
           nombre: titulo,
@@ -145,9 +161,12 @@ function construirZonasDesdeColaboradores(
           tipo: "oficina",
           estatus,
           empresa,
-          colaborador: null,
+          colaborador: colabInfo,
+          colaboradoresAsignados: [colabInfo],
           notas: item.notas ?? null,
-        });
+        };
+        mapaSedes.set(claveSede, nuevaSede);
+        resultado.push(nuevaSede);
       } else {
         resultado.push({
           id: idZona,
@@ -160,11 +179,8 @@ function construirZonasDesdeColaboradores(
           tipo: "home_office",
           estatus,
           empresa,
-          colaborador: {
-            id: colab.id,
-            nombre: colab.nombre_completo || "Colaborador",
-            puesto: colab.puesto || "Colaborador",
-          },
+          colaborador: colabInfo,
+          colaboradoresAsignados: [colabInfo],
           notas: item.notas ?? null,
         });
       }
@@ -287,7 +303,13 @@ export default function ZoneManager({
     // Determinar a qué colaboradores aplicar la geocerca
     let idsDestino: string[] = [];
 
-    if (zona.colaborador?.id) {
+    if (
+      zona.tipo === "oficina" &&
+      zona.colaboradoresAsignados &&
+      zona.colaboradoresAsignados.length > 0
+    ) {
+      idsDestino = zona.colaboradoresAsignados.map((c) => c.id);
+    } else if (zona.colaborador?.id) {
       idsDestino = [zona.colaborador.id];
     } else if (zona.tipo === "oficina") {
       const colabsEmpresa = filasColaboradores.filter(
@@ -301,7 +323,21 @@ export default function ZoneManager({
           : filasColaboradores.map((c) => c.id);
     }
 
-    if (idsDestino.length > 0) {
+    const setDestino = new Set(idsDestino);
+
+    // Si es una edición de sede corporativa, remover la zona de colaboradores que fueron desmarcados
+    const idsParaRemoverZona: string[] = [];
+    if (zona.tipo === "oficina") {
+      for (const fila of filasColaboradores) {
+        if (setDestino.has(fila.id)) continue;
+        const actuales = extraerArregloZonasJson(fila.zonas_geocerca);
+        if (actuales.some((item) => item.id === zona.id)) {
+          idsParaRemoverZona.push(fila.id);
+        }
+      }
+    }
+
+    if (idsDestino.length > 0 || idsParaRemoverZona.length > 0) {
       const mapaFilas = new Map(
         filasColaboradores.map((fila) => [fila.id, fila.zonas_geocerca])
       );
@@ -323,23 +359,35 @@ export default function ZoneManager({
         }
       }
 
-      const resultadosUpdate = await Promise.all(
-        idsDestino.map((colabId) => {
-          const actuales = extraerArregloZonasJson(mapaFilas.get(colabId));
-          const yaExiste = actuales.some((item) => item.id === zona.id);
+      const promesasAsignar = idsDestino.map((colabId) => {
+        const actuales = extraerArregloZonasJson(mapaFilas.get(colabId));
+        const yaExiste = actuales.some((item) => item.id === zona.id);
 
-          const nuevasZonas = yaExiste
-            ? actuales.map((item) =>
-                item.id === zona.id ? payloadZona : (item as unknown as Json)
-              )
-            : [...(actuales as unknown as Json[]), payloadZona];
+        const nuevasZonas = yaExiste
+          ? actuales.map((item) =>
+              item.id === zona.id ? payloadZona : (item as unknown as Json)
+            )
+          : [...(actuales as unknown as Json[]), payloadZona];
 
-          return supabase
-            .from("colaboradores")
-            .update({ zonas_geocerca: nuevasZonas as unknown as Json })
-            .eq("id", colabId);
-        })
-      );
+        return supabase
+          .from("colaboradores")
+          .update({ zonas_geocerca: nuevasZonas as unknown as Json })
+          .eq("id", colabId);
+      });
+
+      const promesasDesasignar = idsParaRemoverZona.map((colabId) => {
+        const actuales = extraerArregloZonasJson(mapaFilas.get(colabId));
+        const filtradas = actuales.filter((item) => item.id !== zona.id);
+        return supabase
+          .from("colaboradores")
+          .update({ zonas_geocerca: filtradas as unknown as Json })
+          .eq("id", colabId);
+      });
+
+      const resultadosUpdate = await Promise.all([
+        ...promesasAsignar,
+        ...promesasDesasignar,
+      ]);
 
       const primerError = resultadosUpdate.find((r) => r.error)?.error;
       if (primerError) {

@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { obtenerSesionYRol } from "@/lib/auth/session";
 import { cumpleFiltroAudiencia } from "@/lib/muro";
 import {
@@ -286,6 +287,161 @@ export async function enviarComentarioMuroAction(payload: {
       error: sanitizarErrorPublico(
         err,
         "Error inesperado al enviar el comentario."
+      ),
+    };
+  }
+}
+
+export interface ActualizarPublicacionMuroPayload {
+  id: string;
+  titulo: string;
+  contenido: string;
+  empresa_destino: "Ambas" | "AIF" | "ROYAL" | string;
+  departamento_destino: string;
+  fecha_publicacion: string;
+  requiere_acuse: boolean;
+  imagen_url: string | null;
+}
+
+/**
+ * Actualiza un comunicado existente en `muro_publicaciones`.
+ * Exclusivo para usuarios con rol Recursos Humanos (o Administrador del Sistema).
+ */
+export async function actualizarPublicacionMuroAction(
+  payload: ActualizarPublicacionMuroPayload
+): Promise<{
+  ok: boolean;
+  error?: string;
+  publicacion?: Record<string, unknown>;
+}> {
+  try {
+    if (!verificarOrigenPermitido()) {
+      return { ok: false, error: "Origen de solicitud no autorizado." };
+    }
+
+    const sesion = await obtenerSesionYRol();
+    if (!sesion || (!sesion.esRecursosHumanos && !sesion.esAdminSistema)) {
+      return {
+        ok: false,
+        error: "Solo Recursos Humanos puede editar comunicados oficiales.",
+      };
+    }
+
+    const idLimpio = (payload.id ?? "").trim();
+    const tituloLimpio = (payload.titulo ?? "").trim();
+    const contenidoLimpio = (payload.contenido ?? "").trim();
+
+    if (!idLimpio || !tituloLimpio || !contenidoLimpio) {
+      return {
+        ok: false,
+        error: "El título y el contenido del comunicado son obligatorios.",
+      };
+    }
+
+    const db = createAdminClient();
+    const { data, error } = await db
+      .from("muro_publicaciones")
+      .update({
+        titulo: tituloLimpio,
+        contenido: contenidoLimpio,
+        empresa_destino: payload.empresa_destino || "Ambas",
+        departamento_destino: payload.departamento_destino || "Todos",
+        fecha_publicacion: payload.fecha_publicacion,
+        requiere_acuse: Boolean(payload.requiere_acuse),
+        imagen_url: payload.imagen_url,
+      })
+      .eq("id", idLimpio)
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      return {
+        ok: false,
+        error: sanitizarErrorPublico(
+          error,
+          "No se pudo actualizar el comunicado en el Muro."
+        ),
+      };
+    }
+
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/muro");
+    revalidatePath("/dashboard/rh");
+
+    return {
+      ok: true,
+      publicacion: data as unknown as Record<string, unknown>,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: sanitizarErrorPublico(
+        err,
+        "Ocurrió un error al actualizar el comunicado."
+      ),
+    };
+  }
+}
+
+/**
+ * Elimina un comunicado de `muro_publicaciones` junto con sus interacciones vinculadas.
+ * Exclusivo para Recursos Humanos (o Administrador del Sistema).
+ */
+export async function eliminarPublicacionMuroAction(
+  publicacionId: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    if (!verificarOrigenPermitido()) {
+      return { ok: false, error: "Origen de solicitud no autorizado." };
+    }
+
+    const sesion = await obtenerSesionYRol();
+    if (!sesion || (!sesion.esRecursosHumanos && !sesion.esAdminSistema)) {
+      return {
+        ok: false,
+        error: "Solo Recursos Humanos puede eliminar comunicados oficiales.",
+      };
+    }
+
+    const idLimpio = (publicacionId ?? "").trim();
+    if (!idLimpio) {
+      return { ok: false, error: "Identificador de comunicado inválido." };
+    }
+
+    const db = createAdminClient();
+
+    // Limpiar interacciones dependientes primero por si la FK no tiene ON DELETE CASCADE
+    await db
+      .from("muro_interacciones")
+      .delete()
+      .eq("publicacion_id", idLimpio);
+
+    const { error } = await db
+      .from("muro_publicaciones")
+      .delete()
+      .eq("id", idLimpio);
+
+    if (error) {
+      return {
+        ok: false,
+        error: sanitizarErrorPublico(
+          error,
+          "No se pudo eliminar el comunicado."
+        ),
+      };
+    }
+
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/muro");
+    revalidatePath("/dashboard/rh");
+
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: sanitizarErrorPublico(
+        err,
+        "Ocurrió un error al eliminar el comunicado."
       ),
     };
   }

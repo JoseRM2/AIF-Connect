@@ -93,6 +93,35 @@ export default function ZoneFormModal({
   const [colaboradorId, setColaboradorId] = useState<string>(
     zonaEditar?.colaborador?.id ?? ""
   );
+  const [modoAsignacionSede, setModoAsignacionSede] = useState<
+    "todos" | "multiple"
+  >(() => {
+    if (zonaEditar?.tipo === "oficina") {
+      if (
+        (zonaEditar.colaboradoresAsignados &&
+          zonaEditar.colaboradoresAsignados.length > 0) ||
+        zonaEditar.colaborador?.id
+      ) {
+        return "multiple";
+      }
+    }
+    return "todos";
+  });
+  const [colaboradoresSedeIds, setColaboradoresSedeIds] = useState<string[]>(
+    () => {
+      if (
+        zonaEditar?.colaboradoresAsignados &&
+        zonaEditar.colaboradoresAsignados.length > 0
+      ) {
+        return zonaEditar.colaboradoresAsignados.map((c) => c.id);
+      }
+      if (zonaEditar?.colaborador?.id) {
+        return [zonaEditar.colaborador.id];
+      }
+      return [];
+    }
+  );
+  const [busquedaColabSede, setBusquedaColabSede] = useState<string>("");
   const [empresa, setEmpresa] = useState<EmpresaZona>(
     zonaEditar?.empresa ?? "AIF"
   );
@@ -142,8 +171,24 @@ export default function ZoneFormModal({
 
   const handleTipoChange = (nuevo: TipoZona) => {
     setTipo(nuevo);
-    if (nuevo !== "home_office") setColaboradorId("");
+    if (nuevo !== "home_office") {
+      setColaboradorId("");
+    }
   };
+
+  const toggleColaboradorSede = (id: string) => {
+    setColaboradoresSedeIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const colaboradoresFiltradosSede = colaboradores.filter((c) => {
+    const q = busquedaColabSede.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      c.nombre.toLowerCase().includes(q) || c.puesto.toLowerCase().includes(q)
+    );
+  });
 
   const handleSugerencia = (id: string) => {
     const sugerencia = SUGERENCIAS_UBICACION.find((s) => s.id === id);
@@ -166,13 +211,26 @@ export default function ZoneFormModal({
       return;
     }
 
+    if (!esHome && modoAsignacionSede === "multiple" && colaboradoresSedeIds.length === 0) {
+      setErrorGuardar(
+        "Selecciona al menos un colaborador para esta sede corporativa o elige 'Todos los colaboradores de la empresa'."
+      );
+      return;
+    }
+
     setIsSaving(true);
     setErrorGuardar(null);
 
     try {
-      const colaborador = colaboradorId
-        ? (colaboradores.find((c) => c.id === colaboradorId) ?? null)
-        : null;
+      const colaborador =
+        esHome && colaboradorId
+          ? (colaboradores.find((c) => c.id === colaboradorId) ?? null)
+          : null;
+
+      const colaboradoresAsignados: ColaboradorAsignado[] =
+        !esHome && modoAsignacionSede === "multiple"
+          ? colaboradores.filter((c) => colaboradoresSedeIds.includes(c.id))
+          : [];
 
       const direccionFinal =
         direccion.trim() ||
@@ -188,7 +246,11 @@ export default function ZoneFormModal({
         tipo,
         estatus: zonaEditar?.estatus ?? "activa",
         empresa,
-        colaborador,
+        colaborador:
+          !esHome && colaboradoresAsignados.length === 1
+            ? colaboradoresAsignados[0]!
+            : colaborador,
+        colaboradoresAsignados,
         notas: notas.trim() || null,
       });
       cerrar();
@@ -278,24 +340,43 @@ export default function ZoneFormModal({
                   ? "COLABORADOR ASIGNADO"
                   : "ASIGNACIÓN (SEDE CORPORATIVA)"}
               </label>
-              <select
-                id="zona-colaborador"
-                value={colaboradorId}
-                onChange={(e) => setColaboradorId(e.target.value)}
-                required={esHome}
-                className={`${FIELD} h-9`}
-              >
-                <option value="" disabled={esHome}>
-                  {esHome
-                    ? "Selecciona un colaborador"
-                    : "Todos los colaboradores de la empresa"}
-                </option>
-                {colaboradores.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.nombre} ({c.puesto})
+              {esHome ? (
+                <select
+                  id="zona-colaborador"
+                  value={colaboradorId}
+                  onChange={(e) => setColaboradorId(e.target.value)}
+                  required={esHome}
+                  className={`${FIELD} h-9`}
+                >
+                  <option value="" disabled>
+                    Selecciona un colaborador
                   </option>
-                ))}
-              </select>
+                  {colaboradores.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nombre} ({c.puesto})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  id="zona-colaborador"
+                  value={modoAsignacionSede}
+                  onChange={(e) =>
+                    setModoAsignacionSede(
+                      e.target.value as "todos" | "multiple"
+                    )
+                  }
+                  className={`${FIELD} h-9`}
+                >
+                  <option value="todos">
+                    Todos los colaboradores de la empresa ({empresa})
+                  </option>
+                  <option value="multiple">
+                    Colaboradores específicos ({colaboradoresSedeIds.length}{" "}
+                    seleccionados)
+                  </option>
+                </select>
+              )}
             </div>
 
             <div>
@@ -316,6 +397,91 @@ export default function ZoneFormModal({
               </select>
             </div>
           </div>
+
+          {/* Selector múltiple de colaboradores cuando es Sede Corporativa en modo "multiple" */}
+          {!esHome && modoAsignacionSede === "multiple" && (
+            <div className="rounded-sm border border-brand-gold/50 bg-brand-beige/25 p-3.5">
+              <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-[9px] font-bold uppercase tracking-widest text-brand-dark">
+                    SELECCIONA LOS COLABORADORES ASIGNADOS A ESTA SEDE (
+                    {colaboradoresSedeIds.length} DE {colaboradores.length})
+                  </span>
+                  <p className="text-[10px] text-gray-500">
+                    Marca uno o varios colaboradores que podrán registrar asistencia dentro de esta sede corporativa.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setColaboradoresSedeIds(colaboradores.map((c) => c.id))
+                    }
+                    className="rounded-sm border border-gray-300 bg-brand-surface px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100"
+                  >
+                    Seleccionar todos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setColaboradoresSedeIds([])}
+                    className="rounded-sm border border-gray-300 bg-brand-surface px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-gray-600 hover:bg-gray-100"
+                  >
+                    Limpiar
+                  </button>
+                </div>
+              </div>
+
+              <input
+                type="text"
+                value={busquedaColabSede}
+                onChange={(e) => setBusquedaColabSede(e.target.value)}
+                placeholder="Filtrar colaboradores por nombre o puesto..."
+                className="mb-2.5 h-8 w-full rounded-sm border border-gray-200 bg-brand-surface px-3 text-xs text-gray-800 outline-none focus:border-brand-dark"
+              />
+
+              <div className="grid max-h-40 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                {colaboradoresFiltradosSede.map((c) => {
+                  const marcado = colaboradoresSedeIds.includes(c.id);
+                  return (
+                    <label
+                      key={c.id}
+                      className={`flex cursor-pointer items-center gap-2.5 rounded-sm border px-2.5 py-1.5 text-xs transition-colors ${
+                        marcado
+                          ? "border-brand-dark bg-brand-dark text-white"
+                          : "border-gray-200 bg-brand-surface text-gray-800 hover:border-brand-dark/40"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={marcado}
+                        onChange={() => toggleColaboradorSede(c.id)}
+                        className="h-3.5 w-3.5 accent-brand-gold"
+                      />
+                      <span className="min-w-0 flex-1 truncate">
+                        <strong
+                          className={
+                            marcado
+                              ? "font-bold text-brand-gold"
+                              : "font-bold text-gray-900"
+                          }
+                        >
+                          {c.nombre}
+                        </strong>{" "}
+                        <span
+                          className={`text-[10px] ${
+                            marcado ? "text-gray-200" : "text-gray-500"
+                          }`}
+                        >
+                          · {c.puesto}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div>
             <label htmlFor="zona-titulo" className={LABEL}>

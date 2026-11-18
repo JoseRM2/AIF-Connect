@@ -86,6 +86,32 @@ export default function ZoneCard({
           </span>
         )}
 
+        {!esHome &&
+          zona.colaboradoresAsignados &&
+          zona.colaboradoresAsignados.length > 0 && (
+            <span className="mt-3 flex items-center gap-1.5 text-[10px] text-gray-500">
+              <UserIcon className="h-3 w-3 shrink-0" />
+              <span className="truncate">
+                <strong className="font-bold text-gray-700">
+                  {zona.colaboradoresAsignados.length === 1
+                    ? zona.colaboradoresAsignados[0]!.nombre
+                    : `${zona.colaboradoresAsignados.length} colaboradores asignados`}
+                </strong>
+                {zona.colaboradoresAsignados.length > 1 && (
+                  <span className="text-gray-500">
+                    {" "}
+                    (
+                    {zona.colaboradoresAsignados
+                      .slice(0, 3)
+                      .map((c) => c.nombre.split(" ")[0])
+                      .join(", ")}
+                    {zona.colaboradoresAsignados.length > 3 ? "…" : ""})
+                  </span>
+                )}
+              </span>
+            </span>
+          )}
+
         <span className="mt-1.5 block text-[11px] text-gray-500">
           {zona.direccion}
         </span>

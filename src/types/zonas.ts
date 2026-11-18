@@ -34,8 +34,10 @@ export interface Zona {
   tipo: TipoZona;
   estatus: EstatusZona;
   empresa: EmpresaZona;
-  /** Solo para zonas de tipo "home_office". */
+  /** Solo para zonas de tipo "home_office" o asignación individual. */
   colaborador: ColaboradorAsignado | null;
+  /** Lista de colaboradores asignados cuando una Sede Corporativa se asigna a múltiples colaboradores específicos. */
+  colaboradoresAsignados?: ColaboradorAsignado[];
   /** Notas u observaciones de RH. */
   notas?: string | null;
 }

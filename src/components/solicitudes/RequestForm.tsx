@@ -289,7 +289,18 @@ export default function RequestForm({
   ) => {
     const { name, value } = e.target;
     setErrorMsg(null);
-    setForm((prev) => ({ ...prev, [name]: value }));
+    setForm((prev) => {
+      // Al elegir fecha_inicio, si fecha_fin está vacía o es anterior, igualarla a fecha_inicio
+      // para permitir solicitar un solo día (ej. del 19 de noviembre al 19 de noviembre) con un clic.
+      if (
+        name === "fecha_inicio" &&
+        value &&
+        (!prev.fecha_fin || prev.fecha_fin < value)
+      ) {
+        return { ...prev, fecha_inicio: value, fecha_fin: value };
+      }
+      return { ...prev, [name]: value };
+    });
   };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -297,14 +308,24 @@ export default function RequestForm({
     if (isSubmitting || enProcesoRef.current) return;
     setErrorMsg(null);
 
-    if (!form.fecha_inicio || !form.fecha_fin) {
+    const fechaInicioEfectiva = form.fecha_inicio.trim();
+    const fechaFinEfectiva = (form.fecha_fin || form.fecha_inicio).trim();
+
+    if (!fechaInicioEfectiva || !fechaFinEfectiva) {
       setErrorMsg("Selecciona las fechas de inicio y fin de tu solicitud.");
+      return;
+    }
+
+    if (fechaFinEfectiva < fechaInicioEfectiva) {
+      setErrorMsg(
+        "La fecha de fin debe ser igual o posterior a la fecha de inicio."
+      );
       return;
     }
 
     if (diasSolicitados <= 0) {
       setErrorMsg(
-        "La fecha de fin debe ser igual o posterior a la fecha de inicio."
+        "El día seleccionado corresponde a un día feriado inhábil (no requiere descontar vacaciones)."
       );
       return;
     }
@@ -468,20 +489,36 @@ export default function RequestForm({
       }
 
       const tipoSolicitudLabel = TIPO_SOLICITUD_LABELS[form.tipo];
-      const estatusInicial =
+      const estatusInicial: "Pendiente_RH" | "Pendiente_Jefe" =
         form.tipo === "incapacidad" || form.tipo === "vacaciones_pagadas"
           ? "Pendiente_RH"
           : "Pendiente_Jefe";
 
-      const { error: insertError } = await supabase.from("solicitudes").insert({
+      const payloadBaseSolicitud = {
         colaborador_id: targetUserId,
         tipo_solicitud: tipoSolicitudLabel,
         fecha_inicio: form.fecha_inicio,
-        fecha_fin: form.fecha_fin,
-        dias_solicitados: Math.max(1, diasSolicitados),
+        fecha_fin: form.fecha_fin || form.fecha_inicio,
         motivo: form.motivo.trim() || null,
         estatus: estatusInicial,
-      });
+      };
+
+      let { error: insertError } = await supabase
+        .from("solicitudes")
+        .insert(payloadBaseSolicitud);
+
+      // Si el esquema exige `dias_solicitados` como NOT NULL, reintentar incluyéndolo
+      if (
+        insertError &&
+        /dias_solicitados/i.test(insertError.message) &&
+        /null value|not-null/i.test(insertError.message)
+      ) {
+        const retry = await supabase.from("solicitudes").insert({
+          ...payloadBaseSolicitud,
+          dias_solicitados: Math.max(1, diasSolicitados),
+        });
+        insertError = retry.error;
+      }
 
       if (insertError) {
         setErrorMsg(
@@ -660,8 +697,8 @@ export default function RequestForm({
         >
           <span>
             {excepcionNominaActiva
-              ? "✓ Excepción extraordinaria de RH activa: Se permiten solicitudes de vacaciones durante semana de nómina."
-              : "Regla de nómina: Del 9 al 15 y del 23 al 30 del mismo mes en curso no es posible solicitar vacaciones (cierres de nómina días 15 y 30)."}
+              ? "✓ Excepción extraordinaria de RH activa: Se permiten solicitar días de vacaciones durante los 5 días hábiles previos a quincena."
+              : "Regla de nómina: Puedes registrar solicitudes en cualquier fecha, pero los días de vacaciones solicitados no pueden caer dentro de los 5 días hábiles previos a cada quincena (días 15 y 30)."}
           </span>
         </div>
       )}

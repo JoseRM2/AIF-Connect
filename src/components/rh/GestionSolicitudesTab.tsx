@@ -491,21 +491,41 @@ export default function GestionSolicitudesTab() {
 
     try {
       const supabase = createClient();
-      const { data: insertada, error } = await supabase
+      const payloadAsignacion = {
+        colaborador_id: colaborador.id,
+        tipo_solicitud: tipoElegido,
+        fecha_inicio: form.fecha_inicio,
+        fecha_fin: form.fecha_fin || form.fecha_inicio,
+        motivo: motivoTexto,
+        estatus: "Completado" as const,
+      };
+
+      let { data: insertada, error } = await supabase
         .from("solicitudes")
-        .insert({
-          colaborador_id: colaborador.id,
-          tipo_solicitud: tipoElegido,
-          fecha_inicio: form.fecha_inicio,
-          fecha_fin: form.fecha_fin || form.fecha_inicio,
-          dias_solicitados: Math.max(1, dias),
-          motivo: motivoTexto,
-          estatus: "Completado",
-        })
+        .insert(payloadAsignacion)
         .select(
           "*, colaboradores!colaborador_id(nombre_completo, saldo_vacaciones)"
         )
         .single();
+
+      if (
+        error &&
+        /dias_solicitados/i.test(error.message) &&
+        /null value|not-null/i.test(error.message)
+      ) {
+        const retry = await supabase
+          .from("solicitudes")
+          .insert({
+            ...payloadAsignacion,
+            dias_solicitados: Math.max(1, dias),
+          })
+          .select(
+            "*, colaboradores!colaborador_id(nombre_completo, saldo_vacaciones)"
+          )
+          .single();
+        insertada = retry.data;
+        error = retry.error;
+      }
 
       if (error) {
         setErrorMsg(
