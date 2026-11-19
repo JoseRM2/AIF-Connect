@@ -2,7 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { obtenerSesionYRol } from "@/lib/auth/session";
-import { cumpleFiltroAudiencia } from "@/lib/muro";
+import {
+  cumpleFiltroAudiencia,
+  esAudienciaCelebracion,
+  extraerCelebracionArea,
+  extraerJefeFestejadoId,
+} from "@/lib/muro";
 import {
   verificarOrigenPermitido,
   verificarRateLimit,
@@ -53,12 +58,19 @@ export async function obtenerDatosMuroAction(): Promise<DatosMuroResponse> {
       queryPub = queryPub.lte("fecha_publicacion", ahoraIso);
     }
 
-    const [pubRes, intRes] = await Promise.all([
+    const [pubRes, intRes, colabsRes] = await Promise.all([
       queryPub.order("fecha_publicacion", { ascending: false }),
       db
         .from("muro_interacciones")
         .select("*, colaboradores!colaborador_id(nombre_completo)")
         .order("created_at", { ascending: true }),
+      !esRH
+        ? db
+            .from("colaboradores")
+            .select(
+              "id, nombre_completo, rol_sistema, es_jefatura, jefe_directo_id, jefe_directo"
+            )
+        : Promise.resolve({ data: null, error: null }),
     ]);
 
     if (pubRes.error) {
@@ -72,18 +84,95 @@ export async function obtenerDatosMuroAction(): Promise<DatosMuroResponse> {
       };
     }
 
+    // Construir contexto de jefatura y relación jefe-subordinado para filtrar celebraciones
+    const listaColabs = colabsRes.data ?? [];
+    const miColab = listaColabs.find((c) => c.id === sesion.userId);
+    const mapaColabPorId = new Map<
+      string,
+      {
+        nombre_completo: string;
+        jefe_directo_id: string | null;
+        jefe_directo: string | null;
+      }
+    >();
+    const referenciasJefesConEquipo = new Set<string>();
+
+    for (const c of listaColabs) {
+      if (c.id) {
+        mapaColabPorId.set(c.id, {
+          nombre_completo: (c.nombre_completo ?? "").trim(),
+          jefe_directo_id: c.jefe_directo_id ?? null,
+          jefe_directo: c.jefe_directo ?? null,
+        });
+      }
+      const jId = (c.jefe_directo_id ?? "").trim().toLowerCase();
+      const jTxt = (c.jefe_directo ?? "").trim().toLowerCase();
+      if (jId) referenciasJefesConEquipo.add(jId);
+      if (jTxt) referenciasJefesConEquipo.add(jTxt);
+    }
+
+    const miIdNorm = sesion.userId.trim().toLowerCase();
+    const miNombreNorm = (miColab?.nombre_completo ?? sesion.nombreCompleto ?? "")
+      .trim()
+      .toLowerCase();
+    const soyJefaturaEfectiva =
+      sesion.esJefatura ||
+      Boolean(miColab?.es_jefatura) ||
+      referenciasJefesConEquipo.has(miIdNorm) ||
+      (Boolean(miNombreNorm) && referenciasJefesConEquipo.has(miNombreNorm));
+
     const publicacionesFiltradas = (
       (pubRes.data ?? []) as unknown as PublicacionMuro[]
-    ).filter((p) => {
-      if (esRH) return true;
-      const fechaLista =
-        !p.fecha_publicacion ||
-        new Date(p.fecha_publicacion).getTime() <= Date.now();
-      return (
-        fechaLista &&
-        cumpleFiltroAudiencia(p, sesion.empresa, sesion.departamento)
+    )
+      .filter((p) => {
+        if (esRH) return true;
+        const fechaLista =
+          !p.fecha_publicacion ||
+          new Date(p.fecha_publicacion).getTime() <= Date.now();
+        if (!fechaLista) return false;
+
+        const jefeFestejadoId = extraerJefeFestejadoId(p.departamento_destino);
+        const celebArea = extraerCelebracionArea(p.departamento_destino);
+        const festejadoId = jefeFestejadoId ?? celebArea?.colaboradorId ?? null;
+
+        let esJefeDirectoDelFestejado = false;
+        let nombreJefeFestejado: string | null = null;
+        if (festejadoId) {
+          const festejado = mapaColabPorId.get(festejadoId);
+          if (festejado) {
+            nombreJefeFestejado = festejado.nombre_completo || null;
+            const festJefeId = (festejado.jefe_directo_id ?? "")
+              .trim()
+              .toLowerCase();
+            const festJefeTxt = (festejado.jefe_directo ?? "")
+              .trim()
+              .toLowerCase();
+            esJefeDirectoDelFestejado =
+              (Boolean(festJefeId) && festJefeId === miIdNorm) ||
+              (Boolean(festJefeTxt) && festJefeTxt === miIdNorm) ||
+              (Boolean(miNombreNorm) &&
+                Boolean(festJefeTxt) &&
+                festJefeTxt === miNombreNorm);
+          }
+        }
+
+        return cumpleFiltroAudiencia(p, sesion.empresa, sesion.departamento, {
+          userId: sesion.userId,
+          esJefatura: soyJefaturaEfectiva,
+          miJefeDirectoId: miColab?.jefe_directo_id ?? null,
+          miJefeDirectoTexto: miColab?.jefe_directo ?? null,
+          nombreJefeFestejado,
+          esJefeDirectoDelFestejado,
+        });
+      })
+      .map((p) =>
+        esAudienciaCelebracion(p.departamento_destino)
+          ? {
+              ...p,
+              colaboradores: { nombre_completo: "Recursos Humanos" },
+            }
+          : p
       );
-    });
 
     const idsPublicacionesVisibles = new Set(
       publicacionesFiltradas.map((p) => p.id)

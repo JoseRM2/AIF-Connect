@@ -173,15 +173,65 @@ export function formatearContenidoConEnlaces(texto: string): string {
   });
 }
 
+export const PREFIJO_AUDIENCIA_JEFATURA = "JEFATURA:";
+export const PREFIJO_AUDIENCIA_CELEBRACION_AREA = "CELEBRACION_AREA:";
+
+export function extraerJefeFestejadoId(
+  departamentoDestino?: string | null
+): string | null {
+  const dep = (departamentoDestino ?? "").trim();
+  if (!dep.toUpperCase().startsWith(PREFIJO_AUDIENCIA_JEFATURA)) {
+    return null;
+  }
+  const id = dep.slice(PREFIJO_AUDIENCIA_JEFATURA.length).trim();
+  return id || null;
+}
+
+export function extraerCelebracionArea(
+  departamentoDestino?: string | null
+): { colaboradorId: string; departamento: string } | null {
+  const dep = (departamentoDestino ?? "").trim();
+  if (!dep.toUpperCase().startsWith(PREFIJO_AUDIENCIA_CELEBRACION_AREA)) {
+    return null;
+  }
+  const resto = dep.slice(PREFIJO_AUDIENCIA_CELEBRACION_AREA.length).trim();
+  if (!resto) return null;
+  const idxSep = resto.indexOf("|");
+  if (idxSep === -1) {
+    return { colaboradorId: resto, departamento: "General" };
+  }
+  const colaboradorId = resto.slice(0, idxSep).trim();
+  const departamento = resto.slice(idxSep + 1).trim() || "General";
+  if (!colaboradorId) return null;
+  return { colaboradorId, departamento };
+}
+
+export function esAudienciaCelebracion(
+  departamentoDestino?: string | null
+): boolean {
+  return Boolean(
+    extraerJefeFestejadoId(departamentoDestino) ||
+      extraerCelebracionArea(departamentoDestino)
+  );
+}
+
 /**
- * Formatea el alcance de audiencia de un comunicado ("General", "Exclusivo: ROYAL", "AIF - Ventas").
+ * Formatea el alcance de audiencia de un comunicado ("General", "Exclusivo: ROYAL", "AIF - Ventas",
+ * o "Equipo Directo y Jefaturas" para celebraciones de Jefaturas).
  */
 export function formatearAlcancePublicacion(
   empresaDestino?: string | null,
   departamentoDestino?: string | null
 ): string {
+  if (extraerJefeFestejadoId(departamentoDestino)) {
+    return "Equipo Directo y Jefaturas";
+  }
+
+  const celebArea = extraerCelebracionArea(departamentoDestino);
   const emp = (empresaDestino ?? "Ambas").trim() || "Ambas";
-  const dep = (departamentoDestino ?? "Todos").trim() || "Todos";
+  const dep = celebArea
+    ? celebArea.departamento
+    : (departamentoDestino ?? "Todos").trim() || "Todos";
 
   const esEmpGeneral = emp.toLowerCase() === "ambas";
   const esDepGeneral = dep.toLowerCase() === "todos";
@@ -198,10 +248,22 @@ export function formatearAlcancePublicacion(
   return `${emp} - ${dep}`;
 }
 
+export interface ContextoAudienciaJefatura {
+  userId?: string | null;
+  esJefatura?: boolean;
+  miJefeDirectoId?: string | null;
+  miJefeDirectoTexto?: string | null;
+  nombreJefeFestejado?: string | null;
+  esJefeDirectoDelFestejado?: boolean;
+}
+
 /**
  * Evalúa si una publicación cumple el filtro de audiencia para el empleado logueado:
- * - empresa_destino es igual a la empresa del usuario, o es "Ambas" (o nulo/vacío en registros previos)
- * - departamento_destino es igual al departamento del usuario, o es "Todos" (o nulo/vacío en registros previos)
+ * - Si `departamento_destino` es `JEFATURA:<jefeId>` (cumpleaños/aniversario de una jefatura):
+ *   visible para el festejado, su jefe directo, sus subordinados directos y otras jefaturas.
+ * - Si `departamento_destino` es `CELEBRACION_AREA:<colabId>|<departamento>` (cumpleaños/aniversario de colaborador):
+ *   visible para el festejado, sus compañeros de área y su jefe directo (aun si pertenece a otra área).
+ * - Si no: `empresa_destino` coincide (o "Ambas") y `departamento_destino` coincide (o "Todos").
  */
 export function cumpleFiltroAudiencia(
   publicacion: {
@@ -209,8 +271,79 @@ export function cumpleFiltroAudiencia(
     departamento_destino?: string | null;
   },
   userEmpresa?: string | null,
-  userDepartamento?: string | null
+  userDepartamento?: string | null,
+  contextoJefatura?: ContextoAudienciaJefatura
 ): boolean {
+  const jefeFestejadoId = extraerJefeFestejadoId(
+    publicacion.departamento_destino
+  );
+  if (jefeFestejadoId) {
+    if (!contextoJefatura) return false;
+
+    const userIdNorm = (contextoJefatura.userId ?? "").trim().toLowerCase();
+    const jefeIdNorm = jefeFestejadoId.trim().toLowerCase();
+
+    // 1. El propio festejado
+    if (userIdNorm && userIdNorm === jefeIdNorm) return true;
+
+    // 2. Otras jefaturas o su jefe directo
+    if (contextoJefatura.esJefatura || contextoJefatura.esJefeDirectoDelFestejado) {
+      return true;
+    }
+
+    // 3. Subordinados directos del festejado (por UUID o por nombre en texto)
+    const miJefeIdNorm = (contextoJefatura.miJefeDirectoId ?? "")
+      .trim()
+      .toLowerCase();
+    const miJefeTextoNorm = (contextoJefatura.miJefeDirectoTexto ?? "")
+      .trim()
+      .toLowerCase();
+    const nombreFestejadoNorm = (contextoJefatura.nombreJefeFestejado ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (miJefeIdNorm && miJefeIdNorm === jefeIdNorm) return true;
+    if (miJefeTextoNorm && miJefeTextoNorm === jefeIdNorm) return true;
+    if (
+      nombreFestejadoNorm &&
+      miJefeTextoNorm &&
+      miJefeTextoNorm === nombreFestejadoNorm
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  const celebArea = extraerCelebracionArea(publicacion.departamento_destino);
+  if (celebArea) {
+    const userIdNorm = (contextoJefatura?.userId ?? "").trim().toLowerCase();
+    const festejadoIdNorm = celebArea.colaboradorId.trim().toLowerCase();
+
+    // 1. El propio festejado
+    if (userIdNorm && userIdNorm === festejadoIdNorm) return true;
+
+    // 2. Su jefe directo (sin importar si pertenece a otro departamento o empresa)
+    if (contextoJefatura?.esJefeDirectoDelFestejado) return true;
+
+    // 3. Compañeros de la misma área y empresa
+    const empDestino =
+      (publicacion.empresa_destino ?? "Ambas").trim() || "Ambas";
+    const empUsuario = (userEmpresa ?? "").trim();
+    const depUsuario = (userDepartamento ?? "").trim();
+
+    const cumpleEmpresa =
+      empDestino.toLowerCase() === "ambas" ||
+      !empUsuario ||
+      empDestino.toLowerCase() === empUsuario.toLowerCase();
+
+    const cumpleDepartamento =
+      Boolean(depUsuario) &&
+      celebArea.departamento.toLowerCase() === depUsuario.toLowerCase();
+
+    return cumpleEmpresa && cumpleDepartamento;
+  }
+
   const empDestino = (publicacion.empresa_destino ?? "Ambas").trim() || "Ambas";
   const depDestino =
     (publicacion.departamento_destino ?? "Todos").trim() || "Todos";

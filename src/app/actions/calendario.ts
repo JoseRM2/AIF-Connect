@@ -16,7 +16,11 @@ import {
   type FechaConmemorativaMuroItem,
   type FeriadoEmpresaItem,
 } from "@/lib/calendario";
-import { serializarUrlsImagenes } from "@/lib/muro";
+import {
+  PREFIJO_AUDIENCIA_CELEBRACION_AREA,
+  PREFIJO_AUDIENCIA_JEFATURA,
+  serializarUrlsImagenes,
+} from "@/lib/muro";
 import { BUCKET_EXPEDIENTES } from "@/lib/storage/expedientes";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
@@ -300,6 +304,49 @@ async function procesarPublicacionesAutomaticasHoy(
   };
   const db = obtenerClienteDb();
 
+  // Precalcular qué colaboradores son Jefatura (por rol, bandera o por tener subordinados directos)
+  // y localizar un perfil de Recursos Humanos como respaldo en caso de que `autor_id` no acepte NULL.
+  const referenciasJefesActivos = new Set<string>();
+  let autorRhFallbackId = autorFallbackId;
+  for (const otro of colaboradoresActivos) {
+    const colJefeId = normalizarComparacion(otro.jefe_directo_id);
+    const colJefeTexto = normalizarComparacion(otro.jefe_directo);
+    if (colJefeId) referenciasJefesActivos.add(colJefeId);
+    if (colJefeTexto) referenciasJefesActivos.add(colJefeTexto);
+    if (
+      autorRhFallbackId === autorFallbackId &&
+      normalizarComparacion(otro.rol_sistema) === "recursos humanos" &&
+      otro.id
+    ) {
+      autorRhFallbackId = String(otro.id);
+    }
+  }
+
+  const insertarPublicacionCelebracionRh = async (payload: {
+    titulo: string;
+    contenido: string;
+    imagen_url: string | null;
+    empresa_destino: string;
+    departamento_destino: string;
+  }) => {
+    // Publicar con `autor_id: null` para que aparezca creada por "Recursos Humanos"
+    const resNull = await db.from("muro_publicaciones").insert({
+      ...payload,
+      requiere_acuse: false,
+      autor_id: null,
+      fecha_publicacion: new Date().toISOString(),
+    });
+    if (!resNull.error) return resNull;
+
+    // Respaldo solo si la BD tiene restricción NOT NULL en `autor_id`
+    return db.from("muro_publicaciones").insert({
+      ...payload,
+      requiere_acuse: false,
+      autor_id: autorRhFallbackId,
+      fecha_publicacion: new Date().toISOString(),
+    });
+  };
+
   for (const colab of colaboradoresActivos) {
     const colabId = String(colab.id ?? "");
     if (!colabId) continue;
@@ -318,6 +365,21 @@ async function procesarPublicacionesAutomaticasHoy(
         .toUpperCase() === "ROYAL"
         ? "ROYAL"
         : "AIF";
+
+    const idNormColab = normalizarComparacion(colabId);
+    const nombreNormColab = normalizarComparacion(nombreCompleto);
+    const esFestejadoJefatura =
+      esColaboradorJefatura(colab) ||
+      (Boolean(idNormColab) && referenciasJefesActivos.has(idNormColab)) ||
+      (Boolean(nombreNormColab) && referenciasJefesActivos.has(nombreNormColab));
+
+    // Regla de visibilidad de cumpleaños y aniversarios en el Muro Corporativo:
+    // - Si el colaborador es Jefatura: visible para sus subordinados directos, su jefe directo y otras jefaturas (`JEFATURA:<colabId>`).
+    // - Si el colaborador NO es Jefatura: visible para sus compañeros de área y su jefe directo (`CELEBRACION_AREA:<colabId>|<departamento>`).
+    const empresaDestinoCelebracion = esFestejadoJefatura ? "Ambas" : empresa;
+    const departamentoDestinoCelebracion = esFestejadoJefatura
+      ? `${PREFIJO_AUDIENCIA_JEFATURA}${colabId}`
+      : `${PREFIJO_AUDIENCIA_CELEBRACION_AREA}${colabId}|${departamento}`;
 
     // 1. Verificar Cumpleaños de hoy
     const diaCumple = Number(colab.dia_cumpleanos ?? 0);
@@ -357,19 +419,13 @@ async function procesarPublicacionesAutomaticasHoy(
           cfgCumple.imagenesPlantilla
         );
 
-        const { error: errInsert } = await db
-          .from("muro_publicaciones")
-          .insert({
-            titulo: tituloPost,
-            contenido: contenidoPost,
-            requiere_acuse: false,
-            autor_id: autorFallbackId,
-            imagen_url: imagenUrlSerializada,
-            fecha_publicacion: new Date().toISOString(),
-            empresa_destino: empresa,
-            departamento_destino:
-              cfgCumple.alcanceMuro === "Departamento" ? departamento : "Todos",
-          });
+        const { error: errInsert } = await insertarPublicacionCelebracionRh({
+          titulo: tituloPost,
+          contenido: contenidoPost,
+          imagen_url: imagenUrlSerializada,
+          empresa_destino: empresaDestinoCelebracion,
+          departamento_destino: departamentoDestinoCelebracion,
+        });
 
         if (!errInsert) {
           registroEmitidas[claveCumple] = new Date().toISOString();
@@ -427,19 +483,13 @@ async function procesarPublicacionesAutomaticasHoy(
           cfgAniv.imagenesPlantilla
         );
 
-        const { error: errInsert } = await db
-          .from("muro_publicaciones")
-          .insert({
-            titulo: tituloPost,
-            contenido: contenidoPost,
-            requiere_acuse: false,
-            autor_id: autorFallbackId,
-            imagen_url: imagenUrlSerializada,
-            fecha_publicacion: new Date().toISOString(),
-            empresa_destino: empresa,
-            departamento_destino:
-              cfgAniv.alcanceMuro === "Departamento" ? departamento : "Todos",
-          });
+        const { error: errInsert } = await insertarPublicacionCelebracionRh({
+          titulo: tituloPost,
+          contenido: contenidoPost,
+          imagen_url: imagenUrlSerializada,
+          empresa_destino: empresaDestinoCelebracion,
+          departamento_destino: departamentoDestinoCelebracion,
+        });
 
         if (!errInsert) {
           registroEmitidas[claveAniv] = new Date().toISOString();
@@ -485,8 +535,8 @@ export interface DatosCalendarioResponse {
 /**
  * Obtiene todos los eventos del Calendario filtrados estrictamente según el rol del usuario:
  * - Colaborador: Sus vacaciones autorizadas, su aniversario, cumpleaños de compañeros de su área y días feriados (LFT + Empresa).
- * - Jefatura: Vacaciones autorizadas de sus subordinados (y propias), aniversarios de sus subordinados (y propio),
- *             cumpleaños de sus subordinados y demás jefaturas (y propio), y días feriados (LFT + Empresa).
+ * - Jefatura: Vacaciones autorizadas, aniversarios y cumpleaños de sus subordinados directos y demás jefaturas (y propios),
+ *             más días feriados (LFT + Empresa).
  * - Recursos Humanos: Todos los eventos de toda la plantilla + fechas conmemorativas programadas en el muro + panel de gestión.
  */
 export async function obtenerDatosCalendarioAction(
@@ -578,53 +628,6 @@ export async function obtenerDatosCalendarioAction(
       colaboradoresActivos.map((c) => [c.id, c])
     );
 
-    const eventos: EventoCalendario[] = [];
-
-    // 1. VACACIONES AUTORIZADAS según rol:
-    // - Colaborador común: solo sus propias vacaciones autorizadas
-    // - Jefatura: todas las vacaciones autorizadas de sus subordinados + las propias
-    // - RH: todas las vacaciones autorizadas de toda la empresa
-    for (const sol of solicitudesAutorizadas ?? []) {
-      const colabId = String(sol.colaborador_id ?? "");
-      const colab = mapaColaboradores.get(colabId);
-      if (!colab) continue;
-
-      const esPropia = colabId === sesion.userId;
-      const esDeSubordinado = idsSubordinados.has(colabId);
-
-      const puedeVerVacacion =
-        esRH || (esJefatura && (esDeSubordinado || esPropia)) || esPropia;
-
-      if (!puedeVerVacacion) continue;
-
-      const nombreColab =
-        colab.nombre_completo?.trim() ||
-        `${colab.nombre ?? ""} ${colab.apellidos ?? ""}`.trim() ||
-        "Colaborador";
-      const depColab =
-        (colab.departamento ?? colab.area ?? "General").trim() || "General";
-      const empColab = (colab.empresa ?? "AIF").trim() || "AIF";
-
-      eventos.push({
-        id: `vac-${sol.id}`,
-        tipo: "vacaciones",
-        fechaInicio: sol.fecha_inicio,
-        fechaFin: sol.fecha_fin || sol.fecha_inicio,
-        titulo: esPropia
-          ? `Mis Vacaciones (${sol.tipo_solicitud})`
-          : `Vacaciones · ${nombreColab}`,
-        subtitulo: `${depColab} · ${empColab}`,
-        descripcion:
-          sol.motivo ||
-          `${sol.tipo_solicitud} autorizada del ${sol.fecha_inicio} al ${sol.fecha_fin}`,
-        colaboradorId: colabId,
-        nombreColaborador: nombreColab,
-        departamento: depColab,
-        empresa: empColab,
-        esPropio: esPropia,
-      });
-    }
-
     // Precalcular en O(N) qué colaboradores son Jefatura o tienen subordinados directos
     const referenciasJefesConEquipo = new Set<string>();
     for (const otro of colaboradoresActivos) {
@@ -649,6 +652,58 @@ export async function obtenerDatosCalendarioAction(
       }
     }
 
+    const eventos: EventoCalendario[] = [];
+
+    // 1. VACACIONES AUTORIZADAS según rol:
+    // - Colaborador común: solo sus propias vacaciones autorizadas
+    // - Jefatura: todas las vacaciones autorizadas de sus subordinados, demás jefaturas y las propias
+    // - RH: todas las vacaciones autorizadas de toda la empresa
+    for (const sol of solicitudesAutorizadas ?? []) {
+      const colabId = String(sol.colaborador_id ?? "");
+      const colab = mapaColaboradores.get(colabId);
+      if (!colab) continue;
+
+      const esPropia = colabId === sesion.userId;
+      const esDeSubordinado = idsSubordinados.has(colabId);
+      const esOtraJefatura = idsColaboradoresJefatura.has(colabId);
+
+      const puedeVerVacacion =
+        esRH ||
+        (esJefatura && (esDeSubordinado || esOtraJefatura || esPropia)) ||
+        esPropia;
+
+      if (!puedeVerVacacion) continue;
+
+      const nombreColab =
+        colab.nombre_completo?.trim() ||
+        `${colab.nombre ?? ""} ${colab.apellidos ?? ""}`.trim() ||
+        "Colaborador";
+      const depColab =
+        (colab.departamento ?? colab.area ?? "General").trim() || "General";
+      const empColab = (colab.empresa ?? "AIF").trim() || "AIF";
+
+      eventos.push({
+        id: `vac-${sol.id}`,
+        tipo: "vacaciones",
+        fechaInicio: sol.fecha_inicio,
+        fechaFin: sol.fecha_fin || sol.fecha_inicio,
+        titulo: esPropia
+          ? `Mis Vacaciones (${sol.tipo_solicitud})`
+          : `Vacaciones · ${nombreColab}`,
+        subtitulo: `${depColab} · ${empColab}${
+          esOtraJefatura && !esDeSubordinado && !esPropia ? " · Jefatura" : ""
+        }`,
+        descripcion:
+          sol.motivo ||
+          `${sol.tipo_solicitud} autorizada del ${sol.fecha_inicio} al ${sol.fecha_fin}`,
+        colaboradorId: colabId,
+        nombreColaborador: nombreColab,
+        departamento: depColab,
+        empresa: empColab,
+        esPropio: esPropia,
+      });
+    }
+
     // 2. ANIVERSARIOS Y CUMPLEAÑOS por cada año visible
     for (const anio of aniosGenerar) {
       for (const colab of colaboradoresActivos) {
@@ -670,10 +725,12 @@ export async function obtenerDatosCalendarioAction(
 
         // 2A. ANIVERSARIO LABORAL:
         // - Colaborador común: su propio aniversario
-        // - Jefatura: aniversarios de sus subordinados + el propio
+        // - Jefatura: aniversarios de sus subordinados, demás jefaturas y el propio
         // - RH: todos los aniversarios
         const puedeVerAniversario =
-          esRH || (esJefatura && (esSubordinado || esPropio)) || esPropio;
+          esRH ||
+          (esJefatura && (esSubordinado || esOtraJefatura || esPropio)) ||
+          esPropio;
 
         if (puedeVerAniversario) {
           const datosIngreso = extraerDiaYMesIngreso(colab.fecha_ingreso);
@@ -696,7 +753,9 @@ export async function obtenerDatosCalendarioAction(
                   : esPropio
                   ? `🏆 Mi ${aniosCumplidos}° Aniversario en ${empColab}`
                   : `🏆 ${aniosCumplidos}° Aniversario · ${nombreColab}`,
-              subtitulo: `${depColab} · ${empColab}`,
+              subtitulo: `${depColab} · ${empColab}${
+                esOtraJefatura && !esSubordinado && !esPropio ? " · Jefatura" : ""
+              }`,
               descripcion:
                 aniosCumplidos === 0
                   ? `Fecha de ingreso a la organización (${colab.fecha_ingreso}).`
