@@ -221,9 +221,80 @@ export function validarRestriccionSemanaNomina(
   }
 
   if (diasEnConflicto.length > 0) {
-    const listaDias = diasEnConflicto.slice(0, 5).join(", ");
-    return `Restricción de nómina: No es posible solicitar días de vacaciones dentro de los 5 días hábiles previos a quincena (días en conflicto: ${listaDias}). Puedes solicitar fechas posteriores o, para casos extraordinarios, Recursos Humanos puede habilitar el interruptor de excepción.`;
+    return "Advertencia: no es posible realizar la solicitud ya que debe solicitarse con 10 dias de anticipación";
   }
 
   return null;
+}
+
+/**
+ * Calcula los días de vacaciones correspondientes conforme al Art. 76 de la LFT
+ * (Reforma "Vacaciones Dignas"):
+ * - Menos de 1 año cumplido (`anios < 1`): 0 días
+ * - 1 año: 12 días
+ * - 2 años: 14 días
+ * - 3 años: 16 días
+ * - 4 años: 18 días
+ * - 5 años: 20 días
+ * - 6 a 10 años: 22 días, aumentando +2 días por cada bloque adicional de 5 años.
+ */
+export function calcularDiasVacacionesPorAniosLft(
+  aniosCumplidos: number
+): number {
+  if (!Number.isFinite(aniosCumplidos)) return 0;
+  const anios = Math.floor(aniosCumplidos);
+  if (anios < 1) return 0;
+  if (anios === 1) return 12;
+  if (anios === 2) return 14;
+  if (anios === 3) return 16;
+  if (anios === 4) return 18;
+  if (anios === 5) return 20;
+  return 22 + Math.floor((anios - 6) / 5) * 2;
+}
+
+/**
+ * Calcula los años completos de antigüedad a partir de `fecha_ingreso` (`YYYY-MM-DD`)
+ * usando la fecha actual en zona horaria `America/Mexico_City` (o `fechaReferencia` si se indica).
+ */
+export function calcularAniosAntiguedadCumplidos(
+  fechaIngresoIso?: string | null,
+  fechaReferencia?: Date
+): number {
+  if (!fechaIngresoIso) return 0;
+  const soloFecha = fechaIngresoIso.trim().slice(0, 10);
+  const [anioIng, mesIng, diaIng] = soloFecha.split("-").map(Number);
+  if (!anioIng || !mesIng || !diaIng) return 0;
+
+  const ref = fechaReferencia ?? new Date();
+  let anioRef = ref.getFullYear();
+  let mesRef = ref.getMonth() + 1;
+  let diaRef = ref.getDate();
+
+  if (!fechaReferencia) {
+    try {
+      const partes = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Mexico_City",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(ref);
+      const y = Number(partes.find((p) => p.type === "year")?.value ?? 0);
+      const m = Number(partes.find((p) => p.type === "month")?.value ?? 0);
+      const d = Number(partes.find((p) => p.type === "day")?.value ?? 0);
+      if (y && m && d) {
+        anioRef = y;
+        mesRef = m;
+        diaRef = d;
+      }
+    } catch {
+      // Respaldo con fecha local del entorno
+    }
+  }
+
+  let anios = anioRef - anioIng;
+  if (mesRef < mesIng || (mesRef === mesIng && diaRef < diaIng)) {
+    anios -= 1;
+  }
+
+  return Math.max(0, anios);
 }

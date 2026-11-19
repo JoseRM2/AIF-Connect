@@ -195,6 +195,9 @@ export default function GestionSolicitudesTab() {
     fechaFin: string;
     motivoTexto: string;
     esMedioDia: boolean;
+    saldoActual: number;
+    saldoResultante: number;
+    resultaraNegativo: boolean;
   } | null>(null);
   const [isCreatingVacaciones, setIsCreatingVacaciones] = useState(false);
   const [mensajeCreada, setMensajeCreada] = useState<string | null>(null);
@@ -550,6 +553,14 @@ export default function GestionSolicitudesTab() {
     setErrorMsg(null);
     setMensajeCreada(null);
 
+    const saldoActualColab = Number(colaborador.saldo_vacaciones ?? 0);
+    const saldoResultanteColab =
+      tipoElegido === "Vacaciones"
+        ? Number((saldoActualColab - dias).toFixed(1))
+        : saldoActualColab;
+    const resultaraNegativo =
+      tipoElegido === "Vacaciones" && saldoResultanteColab < 0;
+
     // Abrir modal de confirmación obligatoria antes de ejecutar la asignación
     setConfirmacionPendiente({
       colaborador,
@@ -559,6 +570,9 @@ export default function GestionSolicitudesTab() {
       fechaFin: fechaFinEfectiva,
       motivoTexto,
       esMedioDia: medioDiaRhEfectivo,
+      saldoActual: saldoActualColab,
+      saldoResultante: saldoResultanteColab,
+      resultaraNegativo,
     });
   };
 
@@ -581,6 +595,8 @@ export default function GestionSolicitudesTab() {
       const supabase = createClient();
 
       // Si RH asigna "Vacaciones" ordinarias, descontar del saldo_vacaciones del colaborador
+      // (permite saldo negativo para vacaciones extraordinarias/adelantadas autorizadas por RH)
+      let saldoActualizadoRh: number | null = null;
       if (tipoElegido === "Vacaciones") {
         const { data: colabDb } = await supabase
           .from("colaboradores")
@@ -591,9 +607,7 @@ export default function GestionSolicitudesTab() {
         const saldoActual = Number(
           colabDb?.saldo_vacaciones ?? colaborador.saldo_vacaciones ?? 0
         );
-        const nuevoSaldo = Number(
-          Math.max(0, saldoActual - dias).toFixed(1)
-        );
+        const nuevoSaldo = Number((saldoActual - dias).toFixed(1));
 
         let { error: saldoErr } = await supabase
           .from("colaboradores")
@@ -610,7 +624,19 @@ export default function GestionSolicitudesTab() {
             .eq("id", colaborador.id);
           saldoErr = retryInt.error;
         }
+
+        if (!saldoErr) {
+          saldoActualizadoRh = nuevoSaldo;
+          setColaboradores((prev) =>
+            prev.map((c) =>
+              c.id === colaborador.id
+                ? { ...c, saldo_vacaciones: nuevoSaldo }
+                : c
+            )
+          );
+        }
       }
+      void saldoActualizadoRh;
 
       const payloadAsignacion = {
         colaborador_id: colaborador.id,
@@ -1305,16 +1331,36 @@ export default function GestionSolicitudesTab() {
                     : `${confirmacionPendiente.fechaInicio} al ${confirmacionPendiente.fechaFin}`}
                 </p>
               </div>
-              {confirmacionPendiente.tipoElegido === "Vacaciones" && (
-                <p className="text-[11px] text-gray-500">
-                  Se descontarán{" "}
-                  <strong>
-                    {confirmacionPendiente.dias}{" "}
-                    {confirmacionPendiente.dias === 1 ? "día" : "días"}
-                  </strong>{" "}
-                  del saldo disponible de vacaciones del colaborador.
-                </p>
-              )}
+              {confirmacionPendiente.tipoElegido === "Vacaciones" &&
+                (confirmacionPendiente.resultaraNegativo ? (
+                  <div
+                    role="alert"
+                    className="rounded-sm border border-status-warning/50 bg-status-warning/10 p-3.5 text-status-warning-dark"
+                  >
+                    <p className="text-xs font-bold leading-snug">
+                      Se ha superado los días disponibles del colaborador, esto
+                      resultará en saldo negativo, ¿estás seguro de continuar?
+                    </p>
+                    <p className="mt-1.5 font-mono text-[11px]">
+                      Saldo actual: {confirmacionPendiente.saldoActual} día(s) →
+                      Saldo resultante:{" "}
+                      <strong>
+                        {confirmacionPendiente.saldoResultante} día(s)
+                      </strong>
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-gray-500">
+                    Se descontarán{" "}
+                    <strong>
+                      {confirmacionPendiente.dias}{" "}
+                      {confirmacionPendiente.dias === 1 ? "día" : "días"}
+                    </strong>{" "}
+                    del saldo disponible de vacaciones del colaborador (saldo
+                    restante:{" "}
+                    <strong>{confirmacionPendiente.saldoResultante}</strong>).
+                  </p>
+                ))}
             </div>
 
             <footer className="flex items-center justify-end gap-2.5 border-t border-gray-100 bg-brand-beige/20 px-6 py-3.5">

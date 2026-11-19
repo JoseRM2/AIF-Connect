@@ -17,6 +17,10 @@ import {
 } from "@/app/actions/errores";
 import { MODULOS_PLATAFORMA } from "@/components/errores/ReporteErroresWorkspace";
 import {
+  calcularAniosAntiguedadCumplidos,
+  calcularDiasVacacionesPorAniosLft,
+} from "@/lib/solicitudes";
+import {
   AlertTriangleIcon,
   CheckCircleIcon,
   DownloadIcon,
@@ -200,26 +204,16 @@ function calcularSaldoVacacionesLft(
 ): number {
   let anios = 0;
 
-  const numAnt = limpiarNumeroMoneda(antiguedadCelda);
-  if (numAnt !== null && numAnt >= 0 && numAnt < 60) {
-    anios = Math.floor(numAnt);
-  } else if (fechaIngresoIso) {
-    const ingreso = new Date(fechaIngresoIso);
-    if (!Number.isNaN(ingreso.getTime())) {
-      const diffMs = Date.now() - ingreso.getTime();
-      anios = Math.max(0, Math.floor(diffMs / (365.25 * 24 * 3600 * 1000)));
+  if (fechaIngresoIso) {
+    anios = calcularAniosAntiguedadCumplidos(fechaIngresoIso);
+  } else {
+    const numAnt = limpiarNumeroMoneda(antiguedadCelda);
+    if (numAnt !== null && numAnt >= 0 && numAnt < 60) {
+      anios = Math.floor(numAnt);
     }
   }
 
-  if (anios <= 1) return 12;
-  if (anios === 2) return 14;
-  if (anios === 3) return 16;
-  if (anios === 4) return 18;
-  if (anios === 5) return 20;
-  if (anios >= 6 && anios <= 10) return 22;
-  if (anios >= 11 && anios <= 15) return 24;
-  if (anios >= 16 && anios <= 20) return 26;
-  return 28;
+  return calcularDiasVacacionesPorAniosLft(anios);
 }
 
 function extraerCorreoCorporativoUnico(
@@ -1571,7 +1565,7 @@ export default function AdminWorkspace({
                           <td className="p-2.5 font-mono text-[11px] text-gray-700">
                             <span className="block">{p.fecha_ingreso}</span>
                             <span className="text-[10px] font-bold text-brand-dark">
-                              {p.saldo_vacaciones ?? 12} días LFT
+                              {p.saldo_vacaciones ?? 0} días LFT
                             </span>
                           </td>
                           <td className="p-2.5">

@@ -8,6 +8,10 @@ import {
   type CrearColaboradorPayload,
 } from "@/app/actions/colaboradores";
 import { createClient } from "@/lib/supabase/client";
+import {
+  calcularAniosAntiguedadCumplidos,
+  calcularDiasVacacionesPorAniosLft,
+} from "@/lib/solicitudes";
 import VisorDocumentoExpedienteModal from "@/components/rh/VisorDocumentoExpedienteModal";
 import {
   ACCEPT_EXPEDIENTES,
@@ -401,8 +405,10 @@ export default function ExpedienteColaboradorModal({
     colaboradorEditar?.saldo_vacaciones !== undefined &&
       colaboradorEditar?.saldo_vacaciones !== null
       ? String(colaboradorEditar.saldo_vacaciones)
-      : "12"
+      : "0"
   );
+  const [saldoEditadoManualmente, setSaldoEditadoManualmente] =
+    useState<boolean>(false);
 
   // 4. Datos Personales
   const [sexo, setSexo] = useState<string>(String(rawEditar.sexo ?? ""));
@@ -674,9 +680,10 @@ export default function ExpedienteColaboradorModal({
     setIsSubmitting(true);
     setErrorMsg(null);
 
-    const saldoNum = Number.parseInt(saldoVacaciones, 10);
-    const saldoFinal =
-      !Number.isNaN(saldoNum) && saldoNum >= 0 ? saldoNum : 12;
+    const saldoNum = Number.parseFloat(saldoVacaciones.replace(",", "."));
+    const saldoFinal = !Number.isNaN(saldoNum)
+      ? Math.round(saldoNum * 2) / 2
+      : 0;
 
     try {
       const supabase = createClient();
@@ -1430,7 +1437,16 @@ export default function ExpedienteColaboradorModal({
                   id={`fecha-ingreso-${uid}`}
                   type="date"
                   value={fechaIngreso}
-                  onChange={(e) => setFechaIngreso(e.target.value)}
+                  onChange={(e) => {
+                    const nuevaFecha = e.target.value;
+                    setFechaIngreso(nuevaFecha);
+                    if (!colaboradorEditar && !saldoEditadoManualmente) {
+                      const diasLft = calcularDiasVacacionesPorAniosLft(
+                        calcularAniosAntiguedadCumplidos(nuevaFecha)
+                      );
+                      setSaldoVacaciones(String(diasLft));
+                    }
+                  }}
                   className={FIELD}
                 />
               </div>
@@ -1507,11 +1523,15 @@ export default function ExpedienteColaboradorModal({
                 <input
                   id={`saldo-vac-${uid}`}
                   type="number"
-                  min={0}
+                  min={-60}
                   max={60}
+                  step="0.5"
                   value={saldoVacaciones}
-                  onChange={(e) => setSaldoVacaciones(e.target.value)}
-                  placeholder="Saldo Inicial de Vacaciones"
+                  onChange={(e) => {
+                    setSaldoEditadoManualmente(true);
+                    setSaldoVacaciones(e.target.value);
+                  }}
+                  placeholder="Saldo de Vacaciones (ej. 12, 11.5 o -4)"
                   className={FIELD}
                 />
               </div>

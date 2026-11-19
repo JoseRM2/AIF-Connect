@@ -21,6 +21,7 @@ import {
   PREFIJO_AUDIENCIA_JEFATURA,
   serializarUrlsImagenes,
 } from "@/lib/muro";
+import { calcularDiasVacacionesPorAniosLft } from "@/lib/solicitudes";
 import { BUCKET_EXPEDIENTES } from "@/lib/storage/expedientes";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
@@ -284,21 +285,65 @@ function extraerDiaYMesIngreso(
   return { anioIngreso: y, mes: m, dia: d };
 }
 
+function obtenerFechaHoyMexico(): {
+  anio: number;
+  mes: number;
+  dia: number;
+  fechaIso: string;
+} {
+  const partes = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Mexico_City",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const anio = Number(partes.find((p) => p.type === "year")?.value ?? 0);
+  const mes = Number(partes.find((p) => p.type === "month")?.value ?? 0);
+  const dia = Number(partes.find((p) => p.type === "day")?.value ?? 0);
+
+  if (!anio || !mes || !dia) {
+    const ahora = new Date();
+    const y = ahora.getFullYear();
+    const m = ahora.getMonth() + 1;
+    const d = ahora.getDate();
+    return {
+      anio: y,
+      mes: m,
+      dia: d,
+      fechaIso: formatearFechaIso(y, m, d),
+    };
+  }
+
+  return {
+    anio,
+    mes,
+    dia,
+    fechaIso: formatearFechaIso(anio, mes, dia),
+  };
+}
+
 /**
  * Emite automáticamente en `muro_publicaciones` las felicitaciones públicas (Enfoque 1)
- * de cumpleaños y aniversario correspondientes al día de hoy si están activas y aún no se han emitido.
+ * de cumpleaños y aniversario correspondientes al día de hoy (zona horaria America/Mexico_City)
+ * si están activas y aún no se han emitido.
  */
 async function procesarPublicacionesAutomaticasHoy(
   colaboradoresActivos: Array<Record<string, unknown>>,
   configActual: ConfigCalendarioRhStorage,
-  autorFallbackId: string
-): Promise<ConfigCalendarioRhStorage> {
-  const hoy = new Date();
-  const anioHoy = hoy.getFullYear();
-  const mesHoy = hoy.getMonth() + 1;
-  const diaHoy = hoy.getDate();
+  autorFallbackId: string | null = null
+): Promise<{
+  config: ConfigCalendarioRhStorage;
+  clavesPublicadas: string[];
+  clavesAbonosVacaciones: string[];
+  fechaMexico: string;
+}> {
+  const { anio: anioHoy, mes: mesHoy, dia: diaHoy, fechaIso: fechaMexico } =
+    obtenerFechaHoyMexico();
 
   let huboCambios = false;
+  const clavesPublicadas: string[] = [];
+  const clavesAbonosVacaciones: string[] = [];
   const registroEmitidas = {
     ...configActual.publicacionesAutomaticasEmitidas,
   };
@@ -307,14 +352,14 @@ async function procesarPublicacionesAutomaticasHoy(
   // Precalcular qué colaboradores son Jefatura (por rol, bandera o por tener subordinados directos)
   // y localizar un perfil de Recursos Humanos como respaldo en caso de que `autor_id` no acepte NULL.
   const referenciasJefesActivos = new Set<string>();
-  let autorRhFallbackId = autorFallbackId;
+  let autorRhFallbackId: string | null = autorFallbackId;
   for (const otro of colaboradoresActivos) {
     const colJefeId = normalizarComparacion(otro.jefe_directo_id);
     const colJefeTexto = normalizarComparacion(otro.jefe_directo);
     if (colJefeId) referenciasJefesActivos.add(colJefeId);
     if (colJefeTexto) referenciasJefesActivos.add(colJefeTexto);
     if (
-      autorRhFallbackId === autorFallbackId &&
+      (!autorRhFallbackId || autorRhFallbackId === autorFallbackId) &&
       normalizarComparacion(otro.rol_sistema) === "recursos humanos" &&
       otro.id
     ) {
@@ -336,7 +381,7 @@ async function procesarPublicacionesAutomaticasHoy(
       autor_id: null,
       fecha_publicacion: new Date().toISOString(),
     });
-    if (!resNull.error) return resNull;
+    if (!resNull.error || !autorRhFallbackId) return resNull;
 
     // Respaldo solo si la BD tiene restricción NOT NULL en `autor_id`
     return db.from("muro_publicaciones").insert({
@@ -429,6 +474,7 @@ async function procesarPublicacionesAutomaticasHoy(
 
         if (!errInsert) {
           registroEmitidas[claveCumple] = new Date().toISOString();
+          clavesPublicadas.push(claveCumple);
           huboCambios = true;
           await db.from("calendario_eventos_rh").upsert(
             {
@@ -447,61 +493,106 @@ async function procesarPublicacionesAutomaticasHoy(
       colab.fecha_ingreso as string | null | undefined
     );
     if (
-      configActual.celebraciones.aniversario.publicarEnMuro &&
       datosIngreso &&
       datosIngreso.dia === diaHoy &&
       datosIngreso.mes === mesHoy &&
       anioHoy > datosIngreso.anioIngreso
     ) {
       const aniosServicio = anioHoy - datosIngreso.anioIngreso;
-      const claveAniv = `aniversario-${anioHoy}-${colabId}`;
-      if (!registroEmitidas[claveAniv]) {
-        const cfgAniv = configActual.celebraciones.aniversario;
-        const tituloPost = reemplazarVariablesPlantilla(
-          cfgAniv.tituloPlantilla,
-          {
-            nombre: nombreCompleto,
-            primer_nombre: primerNombre,
-            puesto,
-            departamento,
-            empresa,
-            anios_servicio: aniosServicio,
-          }
-        );
-        const contenidoPost = reemplazarVariablesPlantilla(
-          cfgAniv.mensajePlantilla,
-          {
-            nombre: nombreCompleto,
-            primer_nombre: primerNombre,
-            puesto,
-            departamento,
-            empresa,
-            anios_servicio: aniosServicio,
-          }
-        );
-        const imagenUrlSerializada = serializarUrlsImagenes(
-          cfgAniv.imagenesPlantilla
-        );
 
-        const { error: errInsert } = await insertarPublicacionCelebracionRh({
-          titulo: tituloPost,
-          contenido: contenidoPost,
-          imagen_url: imagenUrlSerializada,
-          empresa_destino: empresaDestinoCelebracion,
-          departamento_destino: departamentoDestinoCelebracion,
-        });
+      // 2A. Abono automático de vacaciones conforme a la tabla LFT según años cumplidos
+      // (opera independientemente de si está activa la publicación en muro; control anti-duplicado por año)
+      const claveAbono = `abono-vacaciones-${anioHoy}-${colabId}`;
+      const diasAbonoLft = calcularDiasVacacionesPorAniosLft(aniosServicio);
+      if (diasAbonoLft > 0 && !registroEmitidas[claveAbono]) {
+        const { data: colabSaldoActual } = await db
+          .from("colaboradores")
+          .select("saldo_vacaciones")
+          .eq("id", colabId)
+          .maybeSingle();
 
-        if (!errInsert) {
-          registroEmitidas[claveAniv] = new Date().toISOString();
+        const saldoPrevio = Number(
+          colabSaldoActual?.saldo_vacaciones ?? colab.saldo_vacaciones ?? 0
+        );
+        const nuevoSaldo =
+          Math.round((saldoPrevio + diasAbonoLft) * 100) / 100;
+
+        const { error: errSaldo } = await db
+          .from("colaboradores")
+          .update({ saldo_vacaciones: nuevoSaldo })
+          .eq("id", colabId);
+
+        if (!errSaldo) {
+          registroEmitidas[claveAbono] = new Date().toISOString();
+          clavesAbonosVacaciones.push(
+            `${claveAbono} (+${diasAbonoLft}d por ${aniosServicio} año${
+              aniosServicio === 1 ? "" : "s"
+            })`
+          );
           huboCambios = true;
           await db.from("calendario_eventos_rh").upsert(
             {
               tipo: "registro_emision_anual",
-              titulo: tituloPost,
-              clave_emision: claveAniv,
+              titulo: `Abono automático LFT (+${diasAbonoLft} días · ${aniosServicio}° aniversario) · ${nombreCompleto}`,
+              clave_emision: claveAbono,
             },
             { onConflict: "clave_emision" }
           );
+        }
+      }
+
+      // 2B. Publicación de aniversario en el Muro Corporativo (si está habilitada)
+      if (configActual.celebraciones.aniversario.publicarEnMuro) {
+        const claveAniv = `aniversario-${anioHoy}-${colabId}`;
+        if (!registroEmitidas[claveAniv]) {
+          const cfgAniv = configActual.celebraciones.aniversario;
+          const tituloPost = reemplazarVariablesPlantilla(
+            cfgAniv.tituloPlantilla,
+            {
+              nombre: nombreCompleto,
+              primer_nombre: primerNombre,
+              puesto,
+              departamento,
+              empresa,
+              anios_servicio: aniosServicio,
+            }
+          );
+          const contenidoPost = reemplazarVariablesPlantilla(
+            cfgAniv.mensajePlantilla,
+            {
+              nombre: nombreCompleto,
+              primer_nombre: primerNombre,
+              puesto,
+              departamento,
+              empresa,
+              anios_servicio: aniosServicio,
+            }
+          );
+          const imagenUrlSerializada = serializarUrlsImagenes(
+            cfgAniv.imagenesPlantilla
+          );
+
+          const { error: errInsert } = await insertarPublicacionCelebracionRh({
+            titulo: tituloPost,
+            contenido: contenidoPost,
+            imagen_url: imagenUrlSerializada,
+            empresa_destino: empresaDestinoCelebracion,
+            departamento_destino: departamentoDestinoCelebracion,
+          });
+
+          if (!errInsert) {
+            registroEmitidas[claveAniv] = new Date().toISOString();
+            clavesPublicadas.push(claveAniv);
+            huboCambios = true;
+            await db.from("calendario_eventos_rh").upsert(
+              {
+                tipo: "registro_emision_anual",
+                titulo: tituloPost,
+                clave_emision: claveAniv,
+              },
+              { onConflict: "clave_emision" }
+            );
+          }
         }
       }
     }
@@ -514,10 +605,91 @@ async function procesarPublicacionesAutomaticasHoy(
       updatedAt: new Date().toISOString(),
     };
     await guardarConfigCalendarioRhInterno(actualizada);
-    return actualizada;
+    return {
+      config: actualizada,
+      clavesPublicadas,
+      clavesAbonosVacaciones,
+      fechaMexico,
+    };
   }
 
-  return configActual;
+  return {
+    config: configActual,
+    clavesPublicadas,
+    clavesAbonosVacaciones,
+    fechaMexico,
+  };
+}
+
+/**
+ * Ejecuta las publicaciones automáticas de cumpleaños/aniversarios y el abono automático
+ * de días de vacaciones LFT por aniversario laboral del día actual (America/Mexico_City).
+ * Diseñada para invocarse desde el Cron diario de Vercel sin requerir sesión de usuario.
+ */
+export async function ejecutarPublicacionesCelebracionesHoyCron(): Promise<{
+  ok: boolean;
+  fechaMexico: string;
+  publicadas: number;
+  claves: string[];
+  abonosVacaciones: number;
+  clavesAbonos: string[];
+  error?: string;
+}> {
+  try {
+    const db = obtenerClienteDb();
+    const [configRhInicial, { data: todosColaboradores, error: errColabs }] =
+      await Promise.all([
+        leerConfigCalendarioRhInterno(),
+        db
+          .from("colaboradores")
+          .select("*")
+          .order("nombre_completo", { ascending: true }),
+      ]);
+
+    if (errColabs) {
+      return {
+        ok: false,
+        fechaMexico: obtenerFechaHoyMexico().fechaIso,
+        publicadas: 0,
+        claves: [],
+        abonosVacaciones: 0,
+        clavesAbonos: [],
+        error: "No fue posible consultar la plantilla de colaboradores.",
+      };
+    }
+
+    const colaboradoresActivos = (todosColaboradores ?? []).filter((c) =>
+      esColaboradorActivo(c.estatus)
+    );
+
+    const resultado = await procesarPublicacionesAutomaticasHoy(
+      colaboradoresActivos as unknown as Array<Record<string, unknown>>,
+      configRhInicial,
+      null
+    );
+
+    return {
+      ok: true,
+      fechaMexico: resultado.fechaMexico,
+      publicadas: resultado.clavesPublicadas.length,
+      claves: resultado.clavesPublicadas,
+      abonosVacaciones: resultado.clavesAbonosVacaciones.length,
+      clavesAbonos: resultado.clavesAbonosVacaciones,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      fechaMexico: obtenerFechaHoyMexico().fechaIso,
+      publicadas: 0,
+      claves: [],
+      abonosVacaciones: 0,
+      clavesAbonos: [],
+      error:
+        err instanceof Error
+          ? err.message
+          : "Error inesperado al procesar publicaciones de celebración.",
+    };
+  }
 }
 
 export interface DatosCalendarioResponse {
@@ -586,12 +758,13 @@ export async function obtenerDatosCalendarioAction(
       esColaboradorActivo(c.estatus)
     );
 
-    // Procesar publicaciones automáticas de cumpleaños/aniversario de hoy en el Muro (Enfoque 1)
-    configRh = await procesarPublicacionesAutomaticasHoy(
+    // Procesar publicaciones automáticas de cumpleaños/aniversario de hoy en el Muro (respaldo idempotente)
+    const resultadoCelebraciones = await procesarPublicacionesAutomaticasHoy(
       colaboradoresActivos as unknown as Array<Record<string, unknown>>,
       configRh,
       sesion.userId
     );
+    configRh = resultadoCelebraciones.config;
 
     const miPerfil = colaboradoresActivos.find((c) => c.id === sesion.userId);
     const miNombre =

@@ -225,7 +225,7 @@ export default function RequestForm({
   }, [userId]);
 
   const saldoDisponibleEfectivo = useMemo(
-    () => Math.max(0, saldoTotalActual - diasPendientesActual),
+    () => Math.round((saldoTotalActual - diasPendientesActual) * 100) / 100,
     [saldoTotalActual, diasPendientesActual]
   );
 
