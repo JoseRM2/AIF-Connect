@@ -308,17 +308,19 @@ export async function resolverSolicitudEquipoAction(
       };
     }
 
-    // 2. Si se aprueba una solicitud de "Vacaciones", descontar días de `saldo_vacaciones`
+    // 2. Si se aprueba una solicitud de "Vacaciones" o "Vacaciones Pagadas", descontar días de `saldo_vacaciones`
     const tipoNorm = normalizarTextoComparacion(solicitud.tipo_solicitud);
     const estatusPrevioNorm = normalizarTextoComparacion(solicitud.estatus);
     const yaEstabaAprobada =
       estatusPrevioNorm === "aprobado_jefe" ||
       estatusPrevioNorm === "aprobado" ||
       estatusPrevioNorm === "completado";
+    const descuentaSaldo =
+      tipoNorm === "vacaciones" || tipoNorm === "vacaciones pagadas";
 
     if (
       decision === "Aprobado" &&
-      tipoNorm === "vacaciones" &&
+      descuentaSaldo &&
       !yaEstabaAprobada &&
       colaborador
     ) {

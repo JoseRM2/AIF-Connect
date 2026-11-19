@@ -29,12 +29,23 @@ interface RequestFormProps {
   onSubmit?: (data: SolicitudFormData) => void;
 }
 
-const INITIAL_STATE: SolicitudFormData = {
-  tipo: "vacaciones",
-  fecha_inicio: "",
-  fecha_fin: "",
-  motivo: "",
-};
+function obtenerFechaHoyIsoLocal(): string {
+  const ahora = new Date();
+  const y = ahora.getFullYear();
+  const m = String(ahora.getMonth() + 1).padStart(2, "0");
+  const d = String(ahora.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function crearEstadoInicialSolicitud(): SolicitudFormData {
+  const hoy = obtenerFechaHoyIsoLocal();
+  return {
+    tipo: "vacaciones",
+    fecha_inicio: hoy,
+    fecha_fin: hoy,
+    motivo: "",
+  };
+}
 
 const LABEL =
   "mb-2 block text-[10px] font-bold uppercase tracking-widest text-gray-400";
@@ -112,7 +123,9 @@ export default function RequestForm({
   onSubmit,
 }: RequestFormProps) {
   const router = useRouter();
-  const [form, setForm] = useState<SolicitudFormData>(INITIAL_STATE);
+  const [form, setForm] = useState<SolicitudFormData>(() =>
+    crearEstadoInicialSolicitud()
+  );
   const [esMedioDia, setEsMedioDia] = useState<boolean>(false);
   const [jornadaMedioDia, setJornadaMedioDia] = useState<
     "Matutino" | "Vespertino"
@@ -196,7 +209,8 @@ export default function RequestForm({
           const comprometidos = solRes.data.reduce((acum, fila) => {
             const tipoLimpio = (fila.tipo_solicitud ?? "").trim().toLowerCase();
             if (
-              tipoLimpio === "vacaciones" &&
+              (tipoLimpio === "vacaciones" ||
+                tipoLimpio === "vacaciones pagadas") &&
               esEstatusPendienteVacaciones(fila.estatus)
             ) {
               return (
@@ -395,9 +409,9 @@ export default function RequestForm({
       }
     }
 
-    // Regla de negocio: Si pide Vacaciones, los días solicitados no pueden superar el saldo disponible descontando días pendientes de autorización
+    // Regla de negocio: Si pide Vacaciones o Vacaciones Pagadas, los días solicitados no pueden superar el saldo disponible descontando días pendientes de autorización
     if (
-      form.tipo === "vacaciones" &&
+      (form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas") &&
       diasSolicitados > saldoDisponibleEfectivo
     ) {
       setErrorMsg(
@@ -458,14 +472,15 @@ export default function RequestForm({
         const filasBD = solRes.data ?? [];
         setSolicitudesPrevias(filasBD);
 
-        if (form.tipo === "vacaciones") {
+        if (form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas") {
           const saldoBD = Number(
             colabRes.data?.saldo_vacaciones ?? saldoTotalActual
           );
           const pendientesBD = filasBD.reduce((acum, fila) => {
             const tipoLimpio = (fila.tipo_solicitud ?? "").trim().toLowerCase();
             if (
-              tipoLimpio === "vacaciones" &&
+              (tipoLimpio === "vacaciones" ||
+                tipoLimpio === "vacaciones pagadas") &&
               esEstatusPendienteVacaciones(fila.estatus)
             ) {
               return (
@@ -481,7 +496,8 @@ export default function RequestForm({
             }
             return acum;
           }, 0);
-          const disponibleBD = Math.max(0, saldoBD - pendientesBD);
+          const disponibleBD =
+            Math.round((saldoBD - pendientesBD) * 100) / 100;
 
           setSaldoTotalActual(saldoBD);
           setDiasPendientesActual(pendientesBD);
@@ -587,7 +603,7 @@ export default function RequestForm({
       ]);
 
       const enviado = form;
-      setForm(INITIAL_STATE);
+      setForm(crearEstadoInicialSolicitud());
       setEsMedioDia(false);
       router.refresh();
       onSubmit?.(enviado);
@@ -778,18 +794,11 @@ export default function RequestForm({
         />
       </div>
 
-      {esSolicitudVacaciones && (
-        <div
-          className={`flex flex-wrap items-center justify-between gap-2 rounded-sm border px-3.5 py-2 text-[10px] font-semibold ${
-            excepcionNominaActiva
-              ? "border-status-success/40 bg-status-success/10 text-status-success-dark"
-              : "border-brand-gold/40 bg-brand-beige/40 text-gray-800"
-          }`}
-        >
+      {esSolicitudVacaciones && excepcionNominaActiva && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-status-success/40 bg-status-success/10 px-3.5 py-2 text-[10px] font-semibold text-status-success-dark">
           <span>
-            {excepcionNominaActiva
-              ? "✓ Excepción extraordinaria de RH activa: Se permiten solicitar días de vacaciones durante los 5 días hábiles previos a quincena."
-              : "Regla de nómina: Puedes registrar solicitudes en cualquier fecha, pero los días de vacaciones solicitados no pueden caer dentro de los 5 días hábiles previos a cada quincena (días 15 y 30)."}
+            ✓ Excepción extraordinaria de RH activa: Se permiten solicitar días
+            de vacaciones sin restricción de anticipación.
           </span>
         </div>
       )}

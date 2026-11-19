@@ -280,7 +280,7 @@ export default function MuroPage() {
             Comunicación Interna
           </h1>
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
-            AVISOS Y BOLETINES OFICIALES EN TIEMPO REAL.
+            AVISOS Y BOLETINES OFICIALES.
           </p>
         </div>
 

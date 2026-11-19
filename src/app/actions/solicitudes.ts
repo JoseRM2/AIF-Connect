@@ -97,13 +97,16 @@ export async function cancelarSolicitudAction(
 
     let diasReembolsados = 0;
 
-    // Si era de tipo "Vacaciones" y ya se habían descontado días al aprobarse, reembolsar al saldo
+    // Si era de tipo "Vacaciones" o "Vacaciones Pagadas" y ya se habían descontado días al aprobarse, reembolsar al saldo
     const estabaAprobada =
       estatusNorm === "aprobado_jefe" ||
       estatusNorm === "aprobado" ||
       estatusNorm === "completado";
 
-    if (tipoNorm === "vacaciones" && estabaAprobada) {
+    const esTipoConDescuentoSaldo =
+      tipoNorm === "vacaciones" || tipoNorm === "vacaciones pagadas";
+
+    if (esTipoConDescuentoSaldo && estabaAprobada) {
       const [{ data: colab }, feriadosDinamicos] = await Promise.all([
         db
           .from("colaboradores")

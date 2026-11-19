@@ -665,10 +665,7 @@ export default function NotificacionesProactivasModal({
             </div>
 
             {/* Pie del Modal */}
-            <footer className="flex items-center justify-between border-t border-gray-100 bg-brand-beige/20 px-7 py-4">
-              <span className="text-[10px] text-gray-400">
-                Permanece activo al volver a Inicio hasta pulsar Cerrar.
-              </span>
+            <footer className="flex items-center justify-end border-t border-gray-100 bg-brand-beige/20 px-7 py-4">
               <button
                 type="button"
                 onClick={handleCerrarPorBoton}

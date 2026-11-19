@@ -111,7 +111,7 @@ export default async function DashboardHome() {
             </div>
             <h2 className="text-lg font-bold text-gray-900">Asistencia</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Registra tu entrada y salida con validación geográfica.
+              Registra tu entrada y salida.
             </p>
           </div>
           <Link
@@ -131,9 +131,6 @@ export default async function DashboardHome() {
             </span>
             <span className="my-2 font-serif text-6xl font-bold text-gray-900">
               {saldoVacaciones}
-            </span>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-brand-gold">
-              PERIODOS ACTIVOS
             </span>
           </div>
           <div className="flex items-start gap-3 rounded-md border-l-4 border-status-success bg-brand-surface p-4 shadow-sm">

@@ -382,7 +382,7 @@ export default function RequestList({
               )}
 
               <p className="text-[11px] text-gray-500">
-                La solicitud quedará marcada como <strong>Cancelada</strong> para tu Jefatura y RH (ya no podrá ser aprobada). Si ya había sido aprobada, tus días de vacaciones se reembolsarán automáticamente.
+                La solicitud quedará marcada como <strong>Cancelada</strong> para tu Jefatura y RH (ya no podrá ser aprobada).
               </p>
             </div>
 

@@ -2,12 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import CoverageSimulator from "@/components/zonas/CoverageSimulator";
 import ZoneCatalog from "@/components/zonas/ZoneCatalog";
 import ZoneFormModal from "@/components/zonas/ZoneFormModal";
 import ZoneMapPanel from "@/components/zonas/ZoneMapPanel";
 import ZoneMetrics from "@/components/zonas/ZoneMetrics";
-import { PUNTOS_PRUEBA } from "@/lib/mock/zonas";
 import { createClient } from "@/lib/supabase/client";
 import type { Json } from "@/types/supabase";
 import type {
@@ -585,7 +583,6 @@ export default function ZoneManager({
 
         <div className="flex min-w-0 flex-col gap-6 lg:col-span-7">
           <ZoneMapPanel zona={seleccionada} />
-          <CoverageSimulator zonas={zonas} puntosPrueba={PUNTOS_PRUEBA} />
         </div>
       </div>
 

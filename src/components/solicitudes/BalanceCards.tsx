@@ -36,7 +36,7 @@ export default function BalanceCards({ saldo }: { saldo: SaldoVacaciones }) {
         caption="PERIODOS ACTIVOS"
       />
       <BalanceCard
-        label="PARTE PROPORCIONAL"
+        label="DÍAS DISPONIBLES"
         value={saldo.dias_proporcionales}
         caption="DÍAS AÑO EN CURSO"
       />

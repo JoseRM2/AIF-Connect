@@ -125,7 +125,7 @@ export default async function SolicitudesPage() {
       const tipoRaw = (fila.tipo_solicitud ?? "").trim().toLowerCase();
       const estatusNorm = normalizarEstatusSolicitud(fila.estatus, fila.motivo);
       if (
-        tipoRaw === "vacaciones" &&
+        (tipoRaw === "vacaciones" || tipoRaw === "vacaciones pagadas") &&
         (estatusNorm === "Pendiente_Jefe" || estatusNorm === "Pendiente_RH")
       ) {
         return (

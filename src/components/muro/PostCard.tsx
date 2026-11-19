@@ -860,7 +860,7 @@ export default function PostCard({
                 setErrorInteraccion(null);
                 setTextoComentario(e.target.value);
               }}
-              placeholder="Escribe un comentario (será revisado por RH antes de publicarse)..."
+              placeholder="Escribe un comentario..."
               aria-label="Escribir comentario"
               className="flex-1 bg-transparent px-4 py-2.5 text-xs text-gray-800 placeholder:text-gray-400 focus:outline-none disabled:opacity-60"
             />

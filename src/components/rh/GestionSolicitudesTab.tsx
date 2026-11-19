@@ -79,14 +79,25 @@ const ESTATUS_BADGE: Record<
   },
 };
 
-const FORM_INICIAL: VacacionesPagadasForm = {
-  colaborador_id: "",
-  tipo_solicitud: "Vacaciones Pagadas",
-  fecha_inicio: "",
-  fecha_fin: "",
-  dias_a_pagar: 5,
-  motivo: "",
-};
+function obtenerFechaHoyIsoLocal(): string {
+  const ahora = new Date();
+  const y = ahora.getFullYear();
+  const m = String(ahora.getMonth() + 1).padStart(2, "0");
+  const d = String(ahora.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function crearFormInicialRh(): VacacionesPagadasForm {
+  const hoy = obtenerFechaHoyIsoLocal();
+  return {
+    colaborador_id: "",
+    tipo_solicitud: "Vacaciones",
+    fecha_inicio: hoy,
+    fecha_fin: hoy,
+    dias_a_pagar: 1,
+    motivo: "",
+  };
+}
 
 const LIMITE_ANUAL_VACACIONES_PAGADAS = 10;
 const MINIMO_DIAS_VACACIONES_PAGADAS = 5;
@@ -182,7 +193,9 @@ export default function GestionSolicitudesTab() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
-  const [form, setForm] = useState<VacacionesPagadasForm>(FORM_INICIAL);
+  const [form, setForm] = useState<VacacionesPagadasForm>(() =>
+    crearFormInicialRh()
+  );
   const [esMedioDiaRh, setEsMedioDiaRh] = useState<boolean>(false);
   const [jornadaMedioDiaRh, setJornadaMedioDiaRh] = useState<
     "Matutino" | "Vespertino"
@@ -341,21 +354,25 @@ export default function GestionSolicitudesTab() {
         }
       }
 
-      // Si se aprueba ('Completado') y es de tipo 'Vacaciones', descontar días efectivos (sin feriados oficiales ni de empresa) del saldo_vacaciones
-      if (newStatus === "Completado" && esVacaciones) {
+      // Si se aprueba ('Completado') y es de tipo 'Vacaciones' o 'Vacaciones Pagadas', descontar días del saldo_vacaciones
+      if (newStatus === "Completado" && (esVacaciones || esVacacionesPagadas)) {
         const feriadosDinamicos = await obtenerFeriadosDinamicosAction();
         const colabCatalogo = colaboradores.find(
           (c) => c.id === solicitud.colaborador_id
         );
         const empresaColab = (colabCatalogo?.empresa ?? "AIF").trim() || "AIF";
-        const { diasEfectivos: diasSolicitados } =
-          calcularDiasEfectivosSinFeriados(
-            solicitud.fecha_inicio,
-            solicitud.fecha_fin,
-            Array.isArray(feriadosDinamicos) ? feriadosDinamicos : [],
-            empresaColab,
-            solicitud.motivo
-          );
+        const diasSolicitados = esVacacionesPagadas
+          ? calcularDiasSolicitados(
+              solicitud.fecha_inicio,
+              solicitud.fecha_fin
+            )
+          : calcularDiasEfectivosSinFeriados(
+              solicitud.fecha_inicio,
+              solicitud.fecha_fin,
+              Array.isArray(feriadosDinamicos) ? feriadosDinamicos : [],
+              empresaColab,
+              solicitud.motivo
+            ).diasEfectivos;
         const saldoActual = obtenerSaldoColaborador(solicitud.colaboradores);
 
         if (diasSolicitados > saldoActual) {
@@ -485,7 +502,7 @@ export default function GestionSolicitudesTab() {
     }
 
     const tipoElegido: TipoAsignacionDirectaRh =
-      form.tipo_solicitud || "Vacaciones Pagadas";
+      form.tipo_solicitud || "Vacaciones";
 
     const diasPorRango = calcularDiasSolicitados(
       fechaInicioEfectiva,
@@ -553,17 +570,39 @@ export default function GestionSolicitudesTab() {
     setErrorMsg(null);
     setMensajeCreada(null);
 
-    const saldoActualColab = Number(colaborador.saldo_vacaciones ?? 0);
-    const saldoResultanteColab =
-      tipoElegido === "Vacaciones"
-        ? Number((saldoActualColab - dias).toFixed(1))
-        : saldoActualColab;
-    const resultaraNegativo =
-      tipoElegido === "Vacaciones" && saldoResultanteColab < 0;
+    const descuentaSaldoRh =
+      tipoElegido === "Vacaciones" || tipoElegido === "Vacaciones Pagadas";
+
+    // Consultar saldo actualizado en Supabase antes de abrir el modal de confirmación
+    let saldoActualColab = Number(colaborador.saldo_vacaciones ?? 0);
+    if (descuentaSaldoRh) {
+      try {
+        const supabase = createClient();
+        const { data: colabFresco } = await supabase
+          .from("colaboradores")
+          .select("saldo_vacaciones")
+          .eq("id", colaborador.id)
+          .maybeSingle();
+        if (
+          colabFresco &&
+          colabFresco.saldo_vacaciones !== null &&
+          colabFresco.saldo_vacaciones !== undefined
+        ) {
+          saldoActualColab = Number(colabFresco.saldo_vacaciones);
+        }
+      } catch {
+        // Respaldo con el saldo en memoria
+      }
+    }
+
+    const saldoResultanteColab = descuentaSaldoRh
+      ? Number((saldoActualColab - dias).toFixed(1))
+      : saldoActualColab;
+    const resultaraNegativo = descuentaSaldoRh && saldoResultanteColab < 0;
 
     // Abrir modal de confirmación obligatoria antes de ejecutar la asignación
     setConfirmacionPendiente({
-      colaborador,
+      colaborador: { ...colaborador, saldo_vacaciones: saldoActualColab },
       tipoElegido,
       dias,
       fechaInicio: fechaInicioEfectiva,
@@ -594,10 +633,10 @@ export default function GestionSolicitudesTab() {
     try {
       const supabase = createClient();
 
-      // Si RH asigna "Vacaciones" ordinarias, descontar del saldo_vacaciones del colaborador
+      // Si RH asigna "Vacaciones" o "Vacaciones Pagadas", descontar del saldo_vacaciones del colaborador
       // (permite saldo negativo para vacaciones extraordinarias/adelantadas autorizadas por RH)
       let saldoActualizadoRh: number | null = null;
-      if (tipoElegido === "Vacaciones") {
+      if (tipoElegido === "Vacaciones" || tipoElegido === "Vacaciones Pagadas") {
         const { data: colabDb } = await supabase
           .from("colaboradores")
           .select("saldo_vacaciones")
@@ -625,16 +664,22 @@ export default function GestionSolicitudesTab() {
           saldoErr = retryInt.error;
         }
 
-        if (!saldoErr) {
-          saldoActualizadoRh = nuevoSaldo;
-          setColaboradores((prev) =>
-            prev.map((c) =>
-              c.id === colaborador.id
-                ? { ...c, saldo_vacaciones: nuevoSaldo }
-                : c
-            )
+        if (saldoErr) {
+          setErrorMsg(
+            `No se pudo actualizar el saldo de vacaciones del colaborador (${saldoActual} → ${nuevoSaldo}): ${saldoErr.message}`
           );
+          setConfirmacionPendiente(null);
+          return;
         }
+
+        saldoActualizadoRh = nuevoSaldo;
+        setColaboradores((prev) =>
+          prev.map((c) =>
+            c.id === colaborador.id
+              ? { ...c, saldo_vacaciones: nuevoSaldo }
+              : c
+          )
+        );
       }
       void saldoActualizadoRh;
 
@@ -700,7 +745,7 @@ export default function GestionSolicitudesTab() {
         setSolicitudes((prev) => [nuevaFila, ...prev]);
       }
 
-      setForm(FORM_INICIAL);
+      setForm(crearFormInicialRh());
       setEsMedioDiaRh(false);
       setConfirmacionPendiente(null);
       setMensajeCreada(
@@ -1084,7 +1129,7 @@ export default function GestionSolicitudesTab() {
               required
               className={FIELD}
             >
-              <option value="Vacaciones">Vacaciones (Descuenta de saldo)</option>
+              <option value="Vacaciones">Vacaciones</option>
               <option value="Vacaciones Pagadas">Vacaciones Pagadas</option>
               <option value="Permiso con goce de sueldo">
                 Permiso con goce de sueldo
@@ -1331,7 +1376,8 @@ export default function GestionSolicitudesTab() {
                     : `${confirmacionPendiente.fechaInicio} al ${confirmacionPendiente.fechaFin}`}
                 </p>
               </div>
-              {confirmacionPendiente.tipoElegido === "Vacaciones" &&
+              {(confirmacionPendiente.tipoElegido === "Vacaciones" ||
+                confirmacionPendiente.tipoElegido === "Vacaciones Pagadas") &&
                 (confirmacionPendiente.resultaraNegativo ? (
                   <div
                     role="alert"

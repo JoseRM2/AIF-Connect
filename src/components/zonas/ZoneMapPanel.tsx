@@ -9,7 +9,7 @@ const ZoneLocationPicker = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="h-80 w-full animate-pulse rounded-sm border border-gray-200 bg-brand-beige/60" />
+      <div className="h-[560px] w-full animate-pulse rounded-sm border border-gray-200 bg-brand-beige/60" />
     ),
   }
 );
@@ -40,13 +40,13 @@ export default function ZoneMapPanel({ zona }: { zona: Zona | null }) {
           lat={zona.lat}
           lng={zona.lng}
           radioM={zona.radio_m}
-          heightClass="h-80"
+          heightClass="h-[560px]"
         />
       ) : (
         <div
           role="img"
           aria-label="Sin zona seleccionada"
-          className="relative flex h-80 w-full items-center justify-center overflow-hidden rounded-sm border border-gray-200 bg-brand-beige/40"
+          className="relative flex h-[560px] w-full items-center justify-center overflow-hidden rounded-sm border border-gray-200 bg-brand-beige/40"
         >
           <p className="text-xs font-semibold text-gray-400">
             Selecciona una zona autorizada del catálogo izquierdo para
