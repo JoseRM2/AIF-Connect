@@ -365,7 +365,8 @@ export function calcularDiasEfectivosSinFeriados(
   fechaInicio: string,
   fechaFin: string,
   feriadosDinamicos: FeriadoEmpresaItem[] = [],
-  empresaUsuario?: string | null
+  empresaUsuario?: string | null,
+  motivoODias?: string | number | null
 ): {
   diasNaturales: number;
   diasEfectivos: number;
@@ -416,7 +417,19 @@ export function calcularDiasEfectivosSinFeriados(
     }
   }
 
-  const diasEfectivos = Math.max(0, diasNaturales - feriadosEnRango.length);
+  const diasEfectivosEnteros = Math.max(
+    0,
+    diasNaturales - feriadosEnRango.length
+  );
+
+  const esMedioDia =
+    (typeof motivoODias === "number" && motivoODias === 0.5) ||
+    (typeof motivoODias === "string" &&
+      /\[MEDIO D[ÍI]A|\(0\.5 D[ÍI]A/i.test(motivoODias));
+
+  const diasEfectivos =
+    esMedioDia && diasEfectivosEnteros > 0 ? 0.5 : diasEfectivosEnteros;
+
   return { diasNaturales, diasEfectivos, feriadosEnRango };
 }
 

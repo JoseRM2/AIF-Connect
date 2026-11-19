@@ -5,6 +5,7 @@ import type { FormEvent } from "react";
 import { iniciarSesionServerAction } from "@/app/actions/auth";
 import { reiniciarEstadoNotificacionesInicio } from "@/components/dashboard/NotificacionesProactivasModal";
 import { LoadingOverlay } from "@/components/ui/LoadingOverlay";
+import { reiniciarMarcaActividadSesion } from "@/hooks/useAutoLogout";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -37,8 +38,9 @@ export default function LoginPage() {
         return;
       }
 
-      // 2. Reiniciar estado de cierre de notificaciones para que el overlay con blur
-      // aparezca de inmediato en este primer inicio de sesión sobre Inicio (/dashboard)
+      // 2. Reiniciar estado de notificaciones y marca de actividad de 8h para que
+      // un timestamp antiguo en localStorage jamás cierre la sesión recién iniciada.
+      reiniciarMarcaActividadSesion();
       reiniciarEstadoNotificacionesInicio(true);
 
       // 3. Navegación directa de documento completo hacia /dashboard:

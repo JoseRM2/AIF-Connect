@@ -16,6 +16,46 @@ export const TIPOS_SOLICITUD: TipoSolicitud[] = [
   "incapacidad",
 ];
 
+/**
+ * Detecta si el motivo de una solicitud tiene la marca de medio día (`[MEDIO DÍA]` o `0.5 día`).
+ */
+export function esSolicitudMedioDia(
+  motivo: string | null | undefined,
+  diasSolicitados?: number | null
+): boolean {
+  if (typeof diasSolicitados === "number" && diasSolicitados === 0.5) {
+    return true;
+  }
+  const limpio = (motivo ?? "").trim().toUpperCase();
+  return (
+    limpio.includes("[MEDIO DÍA") ||
+    limpio.includes("[MEDIO DIA") ||
+    limpio.includes("(0.5 DÍA") ||
+    limpio.includes("(0.5 DIA")
+  );
+}
+
+/**
+ * Construye el texto de motivo incorporando la etiqueta `[MEDIO DÍA · MATUTINO/VESPERTINO (0.5 DÍAS)]`
+ * cuando el usuario o RH selecciona medio día.
+ */
+export function formatearMotivoConMedioDia(
+  motivoRaw: string | null | undefined,
+  esMedioDia: boolean,
+  jornadaMedioDia: "Matutino" | "Vespertino" = "Matutino"
+): string | null {
+  const limpio = (motivoRaw ?? "")
+    .replace(/\[MEDIO D[ÍI]A[^\]]*\]\s*/gi, "")
+    .trim();
+
+  if (!esMedioDia) {
+    return limpio || null;
+  }
+
+  const prefijo = `[MEDIO DÍA · ${jornadaMedioDia.toUpperCase()} (0.5 DÍAS)]`;
+  return limpio ? `${prefijo} ${limpio}` : prefijo;
+}
+
 export const MESES_NOMBRES = [
   "enero",
   "febrero",

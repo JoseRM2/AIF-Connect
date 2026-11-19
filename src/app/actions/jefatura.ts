@@ -253,7 +253,7 @@ export async function resolverSolicitudEquipoAction(
     const { data: solicitud, error: getSolError } = await supabaseAdmin
       .from("solicitudes")
       .select(
-        "id, colaborador_id, tipo_solicitud, fecha_inicio, fecha_fin, estatus"
+        "id, colaborador_id, tipo_solicitud, fecha_inicio, fecha_fin, motivo, estatus"
       )
       .eq("id", solicitudId)
       .maybeSingle();
@@ -318,7 +318,8 @@ export async function resolverSolicitudEquipoAction(
         solicitud.fecha_inicio || "",
         solicitud.fecha_fin || solicitud.fecha_inicio || "",
         feriadosDinamicos,
-        colaborador.empresa
+        colaborador.empresa,
+        solicitud.motivo
       );
 
       if (calculoDias.diasNaturales > 0) {
@@ -332,12 +333,23 @@ export async function resolverSolicitudEquipoAction(
           };
         }
 
-        const nuevoSaldo = saldoActual - diasSolicitados;
+        const nuevoSaldo = Number((saldoActual - diasSolicitados).toFixed(1));
 
-        const { error: updateSaldoError } = await supabaseAdmin
+        let { error: updateSaldoError } = await supabaseAdmin
           .from("colaboradores")
           .update({ saldo_vacaciones: nuevoSaldo })
           .eq("id", solicitud.colaborador_id);
+
+        if (
+          updateSaldoError &&
+          /invalid input syntax for type integer/i.test(updateSaldoError.message)
+        ) {
+          const retryInt = await supabaseAdmin
+            .from("colaboradores")
+            .update({ saldo_vacaciones: Math.floor(nuevoSaldo) })
+            .eq("id", solicitud.colaborador_id);
+          updateSaldoError = retryInt.error;
+        }
 
         if (updateSaldoError) {
           return {

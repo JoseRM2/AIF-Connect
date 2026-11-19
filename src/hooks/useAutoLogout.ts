@@ -12,6 +12,33 @@ const INACTIVITY_TIMEOUT_MS = 8 * 60 * 60 * 1000;
 const ACTIVITY_THROTTLE_MS = 1_000;
 
 const STORAGE_KEY_LAST_ACTIVITY = "aif_connect_last_activity_ts";
+const SESSION_KEY_ACTIVE_TAB = "aif_connect_session_active_flag";
+
+/**
+ * Reinicia explícitamente la marca de actividad en `localStorage` y `sessionStorage`
+ * al momento de iniciar sesión, evitando que una marca antigua (>8h) de un día previo
+ * cierre la sesión recién iniciada al entrar a `/dashboard`.
+ */
+export function reiniciarMarcaActividadSesion(): void {
+  if (typeof window === "undefined") return;
+  const ahora = String(Date.now());
+  try {
+    window.localStorage.setItem(STORAGE_KEY_LAST_ACTIVITY, ahora);
+    window.sessionStorage.setItem(SESSION_KEY_ACTIVE_TAB, "true");
+  } catch {
+    // Ignorar errores de almacenamiento en navegador
+  }
+}
+
+export function limpiarMarcaActividadSesion(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY_LAST_ACTIVITY);
+    window.sessionStorage.removeItem(SESSION_KEY_ACTIVE_TAB);
+  } catch {
+    // Ignorar errores de almacenamiento
+  }
+}
 
 const ACTIVITY_EVENTS: ReadonlyArray<keyof WindowEventMap> = [
   "mousemove",
@@ -38,9 +65,7 @@ export function useAutoLogout(timeoutMs: number = INACTIVITY_TIMEOUT_MS): void {
     isSigningOutRef.current = true;
 
     try {
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem(STORAGE_KEY_LAST_ACTIVITY);
-      }
+      limpiarMarcaActividadSesion();
       const supabase = createClient();
       await Promise.allSettled([
         supabase.auth.signOut(),
@@ -90,7 +115,24 @@ export function useAutoLogout(timeoutMs: number = INACTIVITY_TIMEOUT_MS): void {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Verificar si al montar o reactivar la pestaña ya transcurrieron las 8 horas
+    // Si es un montaje inicial tras un nuevo login (la pestaña no tenía sesión activa registrada
+    // o viene de /login con `aif_recien_iniciado_sesion`), refrescar el timestamp inmediatamente
+    // para que un valor antiguo de `localStorage` de días previos jamás cierre la nueva sesión.
+    try {
+      const sesionPestanaActiva = window.sessionStorage.getItem(
+        SESSION_KEY_ACTIVE_TAB
+      );
+      const loginReciente = window.sessionStorage.getItem(
+        "aif_recien_iniciado_sesion"
+      );
+      if (sesionPestanaActiva !== "true" || loginReciente === "true") {
+        reiniciarMarcaActividadSesion();
+      }
+    } catch {
+      // Ignorar errores de sessionStorage
+    }
+
+    // Verificar si durante la sesión activa actual ya transcurrieron las 8 horas de inactividad
     const verificarInactividadAcumulada = () => {
       try {
         const guardado = window.localStorage.getItem(STORAGE_KEY_LAST_ACTIVITY);

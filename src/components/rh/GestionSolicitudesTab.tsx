@@ -8,6 +8,10 @@ import {
   obtenerConfigVacacionesNominaAction,
 } from "@/app/actions/configuracionSolicitudes";
 import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
+import {
+  esSolicitudMedioDia,
+  formatearMotivoConMedioDia,
+} from "@/lib/solicitudes";
 import { createClient } from "@/lib/supabase/client";
 import type { EstatusSolicitud } from "@/types/solicitudes";
 import type {
@@ -36,6 +40,7 @@ interface ColaboradorCatalogo {
   id: string;
   nombre_completo: string;
   empresa?: string | null;
+  saldo_vacaciones?: number | null;
 }
 
 const ESTATUS_BADGE: Record<
@@ -165,6 +170,19 @@ export default function GestionSolicitudesTab() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   const [form, setForm] = useState<VacacionesPagadasForm>(FORM_INICIAL);
+  const [esMedioDiaRh, setEsMedioDiaRh] = useState<boolean>(false);
+  const [jornadaMedioDiaRh, setJornadaMedioDiaRh] = useState<
+    "Matutino" | "Vespertino"
+  >("Matutino");
+  const [confirmacionPendiente, setConfirmacionPendiente] = useState<{
+    colaborador: ColaboradorCatalogo;
+    tipoElegido: TipoAsignacionDirectaRh;
+    dias: number;
+    fechaInicio: string;
+    fechaFin: string;
+    motivoTexto: string;
+    esMedioDia: boolean;
+  } | null>(null);
   const [isCreatingVacaciones, setIsCreatingVacaciones] = useState(false);
   const [mensajeCreada, setMensajeCreada] = useState<string | null>(null);
 
@@ -190,11 +208,10 @@ export default function GestionSolicitudesTab() {
               .select(
                 "*, colaboradores!colaborador_id(nombre_completo, saldo_vacaciones)"
               )
-              .in("tipo_solicitud", ["Vacaciones Pagadas", "Incapacidad"])
               .order("created_at", { ascending: false }),
             supabase
               .from("colaboradores")
-              .select("id, nombre_completo, empresa")
+              .select("id, nombre_completo, empresa, saldo_vacaciones")
               .order("nombre_completo", { ascending: true }),
             obtenerConfigVacacionesNominaAction(),
           ]);
@@ -320,7 +337,8 @@ export default function GestionSolicitudesTab() {
             solicitud.fecha_inicio,
             solicitud.fecha_fin,
             Array.isArray(feriadosDinamicos) ? feriadosDinamicos : [],
-            empresaColab
+            empresaColab,
+            solicitud.motivo
           );
         const saldoActual = obtenerSaldoColaborador(solicitud.colaboradores);
 
@@ -330,12 +348,23 @@ export default function GestionSolicitudesTab() {
           return;
         }
 
-        const nuevoSaldo = saldoActual - diasSolicitados;
+        const nuevoSaldo = Number((saldoActual - diasSolicitados).toFixed(1));
 
-        const { error: errorSaldo } = await supabase
+        let { error: errorSaldo } = await supabase
           .from("colaboradores")
           .update({ saldo_vacaciones: nuevoSaldo })
           .eq("id", solicitud.colaborador_id);
+
+        if (
+          errorSaldo &&
+          /invalid input syntax for type integer/i.test(errorSaldo.message)
+        ) {
+          const retryInt = await supabase
+            .from("colaboradores")
+            .update({ saldo_vacaciones: Math.floor(nuevoSaldo) })
+            .eq("id", solicitud.colaborador_id);
+          errorSaldo = retryInt.error;
+        }
 
         if (errorSaldo) {
           alert(
@@ -414,7 +443,14 @@ export default function GestionSolicitudesTab() {
     }
   };
 
-  /** Crea una asignación directa de Vacaciones pagadas o Incapacidad desde RH en Supabase. */
+  const permiteMedioDiaRh =
+    form.tipo_solicitud === "Vacaciones" ||
+    form.tipo_solicitud === "Permiso con goce de sueldo" ||
+    form.tipo_solicitud === "Permiso sin goce de sueldo";
+
+  const medioDiaRhEfectivo = permiteMedioDiaRh && esMedioDiaRh;
+
+  /** Pre-valida la asignación de RH y abre el modal de confirmación antes de guardar en Supabase. */
   const handleCrearVacaciones = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (isCreatingVacaciones) return;
@@ -422,15 +458,28 @@ export default function GestionSolicitudesTab() {
     const colaborador = colaboradores.find((c) => c.id === form.colaborador_id);
     if (!colaborador) return;
 
-    const dias = Math.max(1, Number(form.dias_a_pagar) || 1);
+    const fechaInicioEfectiva = form.fecha_inicio.trim();
+    const fechaFinEfectiva = medioDiaRhEfectivo
+      ? fechaInicioEfectiva
+      : (form.fecha_fin || form.fecha_inicio).trim();
+
+    if (!fechaInicioEfectiva || !fechaFinEfectiva) {
+      setErrorMsg("Selecciona las fechas de inicio y fin para la asignación.");
+      return;
+    }
+
     const tipoElegido: TipoAsignacionDirectaRh =
       form.tipo_solicitud || "Vacaciones Pagadas";
 
+    const diasPorRango = calcularDiasSolicitados(
+      fechaInicioEfectiva,
+      fechaFinEfectiva
+    );
+    const dias = medioDiaRhEfectivo
+      ? 0.5
+      : Math.max(0.5, Number(form.dias_a_pagar) || diasPorRango || 1);
+
     if (tipoElegido === "Vacaciones Pagadas") {
-      const diasPorRango = calcularDiasSolicitados(
-        form.fecha_inicio,
-        form.fecha_fin || form.fecha_inicio
-      );
       const diasEfectivos = Math.max(dias, diasPorRango);
 
       if (
@@ -450,7 +499,7 @@ export default function GestionSolicitudesTab() {
         return;
       }
 
-      const anioSol = obtenerAnioFecha(form.fecha_inicio);
+      const anioSol = obtenerAnioFecha(fechaInicioEfectiva);
       const diasAnioColaborador = solicitudes.reduce((acum, item) => {
         if (
           item.colaborador_id === colaborador.id &&
@@ -473,17 +522,43 @@ export default function GestionSolicitudesTab() {
       }
     }
 
-    const motivoPorDefecto =
-      tipoElegido === "Incapacidad"
-        ? `Asignación directa de incapacidad (${dias} ${
-            dias === 1 ? "día" : "días"
-          })`
-        : `Solicitud directa de vacaciones pagadas (${dias} ${
-            dias === 1 ? "día" : "días"
-          })`;
+    const motivoPorDefecto = `Asignación directa RH de ${tipoElegido.toLowerCase()} (${dias} ${
+      dias === 1 ? "día" : "días"
+    })`;
 
-    const comentarioLimpio = (form.motivo ?? "").trim();
-    const motivoTexto = comentarioLimpio || motivoPorDefecto;
+    const comentarioBase = (form.motivo ?? "").trim() || motivoPorDefecto;
+    const motivoTexto =
+      formatearMotivoConMedioDia(
+        comentarioBase,
+        medioDiaRhEfectivo,
+        jornadaMedioDiaRh
+      ) ?? comentarioBase;
+
+    setErrorMsg(null);
+    setMensajeCreada(null);
+
+    // Abrir modal de confirmación obligatoria antes de ejecutar la asignación
+    setConfirmacionPendiente({
+      colaborador,
+      tipoElegido,
+      dias,
+      fechaInicio: fechaInicioEfectiva,
+      fechaFin: fechaFinEfectiva,
+      motivoTexto,
+      esMedioDia: medioDiaRhEfectivo,
+    });
+  };
+
+  const ejecutarAsignacionConfirmada = async () => {
+    if (!confirmacionPendiente || isCreatingVacaciones) return;
+    const {
+      colaborador,
+      tipoElegido,
+      dias,
+      fechaInicio,
+      fechaFin,
+      motivoTexto,
+    } = confirmacionPendiente;
 
     setIsCreatingVacaciones(true);
     setErrorMsg(null);
@@ -491,11 +566,44 @@ export default function GestionSolicitudesTab() {
 
     try {
       const supabase = createClient();
+
+      // Si RH asigna "Vacaciones" ordinarias, descontar del saldo_vacaciones del colaborador
+      if (tipoElegido === "Vacaciones") {
+        const { data: colabDb } = await supabase
+          .from("colaboradores")
+          .select("saldo_vacaciones")
+          .eq("id", colaborador.id)
+          .maybeSingle();
+
+        const saldoActual = Number(
+          colabDb?.saldo_vacaciones ?? colaborador.saldo_vacaciones ?? 0
+        );
+        const nuevoSaldo = Number(
+          Math.max(0, saldoActual - dias).toFixed(1)
+        );
+
+        let { error: saldoErr } = await supabase
+          .from("colaboradores")
+          .update({ saldo_vacaciones: nuevoSaldo })
+          .eq("id", colaborador.id);
+
+        if (
+          saldoErr &&
+          /invalid input syntax for type integer/i.test(saldoErr.message)
+        ) {
+          const retryInt = await supabase
+            .from("colaboradores")
+            .update({ saldo_vacaciones: Math.floor(nuevoSaldo) })
+            .eq("id", colaborador.id);
+          saldoErr = retryInt.error;
+        }
+      }
+
       const payloadAsignacion = {
         colaborador_id: colaborador.id,
         tipo_solicitud: tipoElegido,
-        fecha_inicio: form.fecha_inicio,
-        fecha_fin: form.fecha_fin || form.fecha_inicio,
+        fecha_inicio: fechaInicio,
+        fecha_fin: fechaFin,
         motivo: motivoTexto,
         estatus: "Completado" as const,
       };
@@ -517,7 +625,7 @@ export default function GestionSolicitudesTab() {
           .from("solicitudes")
           .insert({
             ...payloadAsignacion,
-            dias_solicitados: Math.max(1, dias),
+            dias_solicitados: Math.max(1, Math.ceil(dias)),
           })
           .select(
             "*, colaboradores!colaborador_id(nombre_completo, saldo_vacaciones)"
@@ -531,6 +639,7 @@ export default function GestionSolicitudesTab() {
         setErrorMsg(
           `No se pudo crear la asignación de ${tipoElegido.toLowerCase()}: ${error.message}`
         );
+        setConfirmacionPendiente(null);
         return;
       }
 
@@ -553,6 +662,8 @@ export default function GestionSolicitudesTab() {
       }
 
       setForm(FORM_INICIAL);
+      setEsMedioDiaRh(false);
+      setConfirmacionPendiente(null);
       setMensajeCreada(
         `${tipoElegido} asignada para ${colaborador.nombre_completo} (${dias} ${
           dias === 1 ? "día" : "días"
@@ -564,6 +675,7 @@ export default function GestionSolicitudesTab() {
           ? err.message
           : "Ocurrió un error al registrar la asignación."
       );
+      setConfirmacionPendiente(null);
     } finally {
       setIsCreatingVacaciones(false);
     }
@@ -699,13 +811,22 @@ export default function GestionSolicitudesTab() {
                         <p className="text-xs font-bold text-gray-900">
                           {nombreColaborador}
                         </p>
-                        <p className="mt-0.5 text-[9px] font-bold uppercase tracking-widest text-brand-gold">
-                          {solicitud.tipo_solicitud}
-                        </p>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                          <span className="text-[9px] font-bold uppercase tracking-widest text-brand-gold">
+                            {solicitud.tipo_solicitud}
+                          </span>
+                          {esSolicitudMedioDia(solicitud.motivo) && (
+                            <span className="rounded-sm bg-brand-beige px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-wider text-brand-dark">
+                              MEDIO DÍA (0.5 DÍAS)
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-6 py-4 font-mono text-[11px] text-gray-600">
-                        {solicitud.fecha_inicio} al {solicitud.fecha_fin}
+                        {solicitud.fecha_inicio === solicitud.fecha_fin
+                          ? solicitud.fecha_inicio
+                          : `${solicitud.fecha_inicio} al ${solicitud.fecha_fin}`}
                       </td>
 
                       <td className="px-6 py-4 text-xs text-gray-600">
@@ -845,8 +966,7 @@ export default function GestionSolicitudesTab() {
               Asignar vacaciones
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-gray-500">
-              Asignar de forma directa vacaciones pagadas o incapacidad para un
-              colaborador.
+              Asignar de forma directa cualquier tipo de vacaciones, permisos o incapacidad en casos especiales (incluyendo medios días).
             </p>
           </header>
 
@@ -873,7 +993,8 @@ export default function GestionSolicitudesTab() {
               </option>
               {colaboradores.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.nombre_completo} ({c.empresa || "AIF"})
+                  {c.nombre_completo} ({c.empresa || "AIF"} · Saldo:{" "}
+                  {c.saldo_vacaciones ?? 0}d)
                 </option>
               ))}
             </select>
@@ -881,25 +1002,83 @@ export default function GestionSolicitudesTab() {
 
           <div>
             <label htmlFor="rh-vac-tipo" className={LABEL}>
-              TIPO DE SOLICITUD
+              TIPO DE SOLICITUD / VACACIONES
             </label>
             <select
               id="rh-vac-tipo"
               value={form.tipo_solicitud}
               onChange={(e) => {
+                const nuevoTipo = e.target.value as TipoAsignacionDirectaRh;
+                if (
+                  nuevoTipo !== "Vacaciones" &&
+                  nuevoTipo !== "Permiso con goce de sueldo" &&
+                  nuevoTipo !== "Permiso sin goce de sueldo"
+                ) {
+                  setEsMedioDiaRh(false);
+                }
                 setForm((prev) => ({
                   ...prev,
-                  tipo_solicitud: e.target.value as TipoAsignacionDirectaRh,
+                  tipo_solicitud: nuevoTipo,
+                  dias_a_pagar:
+                    nuevoTipo === "Vacaciones Pagadas"
+                      ? Math.max(5, prev.dias_a_pagar || 5)
+                      : prev.dias_a_pagar || 1,
                 }));
                 setMensajeCreada(null);
               }}
               required
               className={FIELD}
             >
+              <option value="Vacaciones">Vacaciones (Descuenta de saldo)</option>
               <option value="Vacaciones Pagadas">Vacaciones Pagadas</option>
+              <option value="Permiso con goce de sueldo">
+                Permiso con goce de sueldo
+              </option>
+              <option value="Permiso sin goce de sueldo">
+                Permiso sin goce de sueldo
+              </option>
               <option value="Incapacidad">Incapacidad</option>
             </select>
           </div>
+
+          {permiteMedioDiaRh && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-brand-gold/40 bg-brand-beige/35 px-3 py-2">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-bold text-gray-800">
+                <input
+                  type="checkbox"
+                  checked={esMedioDiaRh}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setEsMedioDiaRh(checked);
+                    setForm((prev) => ({
+                      ...prev,
+                      fecha_fin: checked
+                        ? prev.fecha_inicio
+                        : prev.fecha_fin || prev.fecha_inicio,
+                      dias_a_pagar: checked ? 0.5 : Math.max(1, Math.ceil(prev.dias_a_pagar)),
+                    }));
+                  }}
+                  className="h-4 w-4 accent-brand-dark"
+                />
+                <span>Asignar medio día (0.5 días)</span>
+              </label>
+
+              {esMedioDiaRh && (
+                <select
+                  value={jornadaMedioDiaRh}
+                  onChange={(e) =>
+                    setJornadaMedioDiaRh(
+                      e.target.value as "Matutino" | "Vespertino"
+                    )
+                  }
+                  className="h-7 rounded-sm border border-gray-300 bg-brand-surface px-2 text-[11px] font-bold text-gray-900"
+                >
+                  <option value="Matutino">Matutino (Mañana)</option>
+                  <option value="Vespertino">Vespertino (Tarde)</option>
+                </select>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -910,9 +1089,31 @@ export default function GestionSolicitudesTab() {
                 id="rh-vac-inicio"
                 type="date"
                 value={form.fecha_inicio}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, fecha_inicio: e.target.value }))
-                }
+                onChange={(e) => {
+                  const nuevaInicio = e.target.value;
+                  setForm((prev) => {
+                    const nuevaFin =
+                      medioDiaRhEfectivo ||
+                      !prev.fecha_fin ||
+                      prev.fecha_fin < nuevaInicio
+                        ? nuevaInicio
+                        : prev.fecha_fin;
+                    const diasRango = calcularDiasSolicitados(
+                      nuevaInicio,
+                      nuevaFin
+                    );
+                    return {
+                      ...prev,
+                      fecha_inicio: nuevaInicio,
+                      fecha_fin: nuevaFin,
+                      dias_a_pagar: medioDiaRhEfectivo
+                        ? 0.5
+                        : prev.tipo_solicitud === "Vacaciones Pagadas"
+                        ? Math.max(5, diasRango || 5)
+                        : diasRango || 1,
+                    };
+                  });
+                }}
                 required
                 className={FIELD}
               />
@@ -925,13 +1126,29 @@ export default function GestionSolicitudesTab() {
               <input
                 id="rh-vac-fin"
                 type="date"
-                value={form.fecha_fin}
+                value={medioDiaRhEfectivo ? form.fecha_inicio : form.fecha_fin}
                 min={form.fecha_inicio || undefined}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, fecha_fin: e.target.value }))
-                }
+                disabled={medioDiaRhEfectivo}
+                onChange={(e) => {
+                  const nuevaFin = e.target.value;
+                  setForm((prev) => {
+                    const diasRango = calcularDiasSolicitados(
+                      prev.fecha_inicio,
+                      nuevaFin
+                    );
+                    return {
+                      ...prev,
+                      fecha_fin: nuevaFin,
+                      dias_a_pagar: medioDiaRhEfectivo
+                        ? 0.5
+                        : prev.tipo_solicitud === "Vacaciones Pagadas"
+                        ? Math.max(5, diasRango || prev.dias_a_pagar)
+                        : diasRango || prev.dias_a_pagar,
+                    };
+                  });
+                }}
                 required
-                className={FIELD}
+                className={`${FIELD} disabled:cursor-not-allowed disabled:opacity-60`}
               />
             </div>
           </div>
@@ -940,30 +1157,40 @@ export default function GestionSolicitudesTab() {
             <label htmlFor="rh-vac-dias" className={LABEL}>
               {form.tipo_solicitud === "Incapacidad"
                 ? "DÍAS DE INCAPACIDAD"
-                : "DÍAS A PAGAR (MÍN. 5, MÁX. 10 ANUAL)"}
+                : form.tipo_solicitud === "Vacaciones Pagadas"
+                ? "DÍAS A PAGAR (MÍN. 5, MÁX. 10 ANUAL)"
+                : "DÍAS A ASIGNAR (SOPORTA 0.5 PARA MEDIO DÍA)"}
             </label>
             <input
               id="rh-vac-dias"
               type="number"
+              step={permiteMedioDiaRh ? "0.5" : "1"}
               min={
-                form.tipo_solicitud === "Incapacidad"
-                  ? 1
-                  : MINIMO_DIAS_VACACIONES_PAGADAS
+                form.tipo_solicitud === "Vacaciones Pagadas"
+                  ? MINIMO_DIAS_VACACIONES_PAGADAS
+                  : permiteMedioDiaRh
+                  ? 0.5
+                  : 1
               }
               max={
-                form.tipo_solicitud === "Incapacidad"
-                  ? 30
-                  : LIMITE_ANUAL_VACACIONES_PAGADAS
+                form.tipo_solicitud === "Vacaciones Pagadas"
+                  ? LIMITE_ANUAL_VACACIONES_PAGADAS
+                  : 60
               }
-              value={form.dias_a_pagar}
-              onChange={(e) =>
+              disabled={medioDiaRhEfectivo}
+              value={medioDiaRhEfectivo ? 0.5 : form.dias_a_pagar}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (val === 0.5 && permiteMedioDiaRh) {
+                  setEsMedioDiaRh(true);
+                }
                 setForm((prev) => ({
                   ...prev,
-                  dias_a_pagar: Number(e.target.value),
-                }))
-              }
+                  dias_a_pagar: val,
+                }));
+              }}
               required
-              className={FIELD}
+              className={`${FIELD} disabled:cursor-not-allowed disabled:opacity-60`}
             />
           </div>
 
@@ -1003,6 +1230,87 @@ export default function GestionSolicitudesTab() {
         </form>
         </div>
       </aside>
+
+      {/* Modal de Confirmación Obligatoria al Asignar Vacaciones desde RH */}
+      {confirmacionPendiente && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirmar asignación de vacaciones"
+          onClick={() =>
+            !isCreatingVacaciones && setConfirmacionPendiente(null)
+          }
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex w-full max-w-md flex-col overflow-hidden rounded-sm bg-brand-surface shadow-2xl"
+          >
+            <header className="border-b border-gray-100 bg-brand-dark px-6 py-4 text-white">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-brand-gold">
+                VALIDACIÓN DE ASIGNACIÓN ESPECIAL RH
+              </span>
+              <h3 className="mt-1 font-serif text-base font-bold leading-snug text-white">
+                ¿Estás seguro de asignar {confirmacionPendiente.tipoElegido} al
+                colaborador{" "}
+                {confirmacionPendiente.colaborador.nombre_completo}?
+              </h3>
+            </header>
+
+            <div className="flex flex-col gap-3 p-6 text-xs text-gray-700">
+              <div className="rounded-sm border border-gray-200 bg-brand-beige/30 p-3.5">
+                <p className="text-xs font-bold text-gray-900">
+                  {confirmacionPendiente.colaborador.nombre_completo}
+                </p>
+                <p className="mt-1 text-[11px] font-semibold text-brand-dark">
+                  Tipo: {confirmacionPendiente.tipoElegido} (
+                  {confirmacionPendiente.dias}{" "}
+                  {confirmacionPendiente.dias === 1 ? "día" : "días"}
+                  {confirmacionPendiente.esMedioDia ? " · Medio día" : ""})
+                </p>
+                <p className="mt-0.5 font-mono text-[11px] text-gray-600">
+                  Período:{" "}
+                  {confirmacionPendiente.fechaInicio ===
+                  confirmacionPendiente.fechaFin
+                    ? confirmacionPendiente.fechaInicio
+                    : `${confirmacionPendiente.fechaInicio} al ${confirmacionPendiente.fechaFin}`}
+                </p>
+              </div>
+              {confirmacionPendiente.tipoElegido === "Vacaciones" && (
+                <p className="text-[11px] text-gray-500">
+                  Se descontarán{" "}
+                  <strong>
+                    {confirmacionPendiente.dias}{" "}
+                    {confirmacionPendiente.dias === 1 ? "día" : "días"}
+                  </strong>{" "}
+                  del saldo disponible de vacaciones del colaborador.
+                </p>
+              )}
+            </div>
+
+            <footer className="flex items-center justify-end gap-2.5 border-t border-gray-100 bg-brand-beige/20 px-6 py-3.5">
+              <button
+                type="button"
+                disabled={isCreatingVacaciones}
+                onClick={() => setConfirmacionPendiente(null)}
+                className="rounded-sm border border-gray-300 bg-brand-surface px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50"
+              >
+                CANCELAR
+              </button>
+              <button
+                type="button"
+                disabled={isCreatingVacaciones}
+                onClick={ejecutarAsignacionConfirmada}
+                className="rounded-sm bg-brand-dark px-5 py-2 text-[9px] font-bold uppercase tracking-widest text-brand-gold transition-colors hover:bg-brand-dark/90 disabled:opacity-50"
+              >
+                {isCreatingVacaciones
+                  ? "ASIGNANDO…"
+                  : "SÍ, CONFIRMAR ASIGNACIÓN"}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

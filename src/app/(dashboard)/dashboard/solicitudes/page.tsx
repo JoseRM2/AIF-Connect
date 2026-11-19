@@ -128,7 +128,8 @@ export default async function SolicitudesPage() {
             fila.fecha_inicio,
             fila.fecha_fin,
             listaFeriados,
-            empresaColaborador
+            empresaColaborador,
+            fila.motivo
           ).diasEfectivos
         );
       }

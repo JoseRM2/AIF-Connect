@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { cerrarSesionServerAction } from "@/app/actions/auth";
 import { useAuthRole } from "@/components/auth/AuthRoleContext";
 import { reiniciarEstadoNotificacionesInicio } from "@/components/dashboard/NotificacionesProactivasModal";
+import { limpiarMarcaActividadSesion } from "@/hooks/useAutoLogout";
 import {
   AlertTriangleIcon,
   CalendarIcon,
@@ -78,6 +79,7 @@ export default function Sidebar({
     href === "/dashboard" ? pathname === href : pathname.startsWith(href);
 
   const handleLogout = async () => {
+    limpiarMarcaActividadSesion();
     reiniciarEstadoNotificacionesInicio(false);
     const supabase = createClient();
     await Promise.allSettled([

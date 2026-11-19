@@ -10,6 +10,7 @@ import {
   type FeriadoEmpresaItem,
 } from "@/lib/calendario";
 import {
+  formatearMotivoConMedioDia,
   TIPO_SOLICITUD_LABELS,
   TIPOS_SOLICITUD,
   validarRestriccionSemanaNomina,
@@ -95,6 +96,7 @@ interface SolicitudPrevRow {
   tipo_solicitud: string | null;
   fecha_inicio: string;
   fecha_fin: string;
+  motivo?: string | null;
   estatus: string | null;
 }
 
@@ -107,6 +109,10 @@ export default function RequestForm({
 }: RequestFormProps) {
   const router = useRouter();
   const [form, setForm] = useState<SolicitudFormData>(INITIAL_STATE);
+  const [esMedioDia, setEsMedioDia] = useState<boolean>(false);
+  const [jornadaMedioDia, setJornadaMedioDia] = useState<
+    "Matutino" | "Vespertino"
+  >("Matutino");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const enProcesoRef = useRef(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -161,7 +167,7 @@ export default function RequestForm({
             .maybeSingle(),
           supabase
             .from("solicitudes")
-            .select("tipo_solicitud, fecha_inicio, fecha_fin, estatus")
+            .select("tipo_solicitud, fecha_inicio, fecha_fin, motivo, estatus")
             .eq("colaborador_id", targetUserId)
             .in("tipo_solicitud", ["Vacaciones", "Vacaciones Pagadas"]),
           obtenerConfigVacacionesNominaAction(),
@@ -195,7 +201,8 @@ export default function RequestForm({
                   fila.fecha_inicio,
                   fila.fecha_fin,
                   listaFeriados,
-                  empActual
+                  empActual,
+                  fila.motivo
                 ).diasEfectivos
               );
             }
@@ -259,13 +266,27 @@ export default function RequestForm({
     [form.fecha_inicio, form.fecha_fin, feriadosDinamicos, empresaColaborador]
   );
 
-  const diasSolicitados = useMemo(
-    () =>
-      form.tipo === "vacaciones"
-        ? calculoRangoActual.diasEfectivos
-        : calcularDiasSolicitados(form.fecha_inicio, form.fecha_fin),
-    [form.tipo, calculoRangoActual.diasEfectivos, form.fecha_inicio, form.fecha_fin]
-  );
+  const permiteMedioDia =
+    form.tipo === "vacaciones" ||
+    form.tipo === "permiso_con_goce" ||
+    form.tipo === "permiso_sin_goce";
+
+  const medioDiaEfectivo = permiteMedioDia && esMedioDia;
+
+  const diasSolicitados = useMemo(() => {
+    if (medioDiaEfectivo && form.fecha_inicio) {
+      return calculoRangoActual.diasEfectivos > 0 ? 0.5 : 0;
+    }
+    return form.tipo === "vacaciones"
+      ? calculoRangoActual.diasEfectivos
+      : calcularDiasSolicitados(form.fecha_inicio, form.fecha_fin);
+  }, [
+    medioDiaEfectivo,
+    form.tipo,
+    calculoRangoActual.diasEfectivos,
+    form.fecha_inicio,
+    form.fecha_fin,
+  ]);
 
   const esSolicitudVacaciones =
     form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas";
@@ -289,15 +310,25 @@ export default function RequestForm({
   ) => {
     const { name, value } = e.target;
     setErrorMsg(null);
+    if (
+      name === "tipo" &&
+      value !== "vacaciones" &&
+      value !== "permiso_con_goce" &&
+      value !== "permiso_sin_goce"
+    ) {
+      setEsMedioDia(false);
+    }
     setForm((prev) => {
-      // Al elegir fecha_inicio, si fecha_fin está vacía o es anterior, igualarla a fecha_inicio
-      // para permitir solicitar un solo día (ej. del 19 de noviembre al 19 de noviembre) con un clic.
+      // Si está activo Medio Día o si fecha_fin está vacía / es anterior, igualar fecha_fin a fecha_inicio
       if (
         name === "fecha_inicio" &&
         value &&
-        (!prev.fecha_fin || prev.fecha_fin < value)
+        (esMedioDia || !prev.fecha_fin || prev.fecha_fin < value)
       ) {
         return { ...prev, fecha_inicio: value, fecha_fin: value };
+      }
+      if (name === "fecha_fin" && esMedioDia && prev.fecha_inicio) {
+        return { ...prev, fecha_fin: prev.fecha_inicio };
       }
       return { ...prev, [name]: value };
     });
@@ -401,7 +432,7 @@ export default function RequestForm({
             .maybeSingle(),
           supabase
             .from("solicitudes")
-            .select("tipo_solicitud, fecha_inicio, fecha_fin, estatus")
+            .select("tipo_solicitud, fecha_inicio, fecha_fin, motivo, estatus")
             .eq("colaborador_id", targetUserId)
             .in("tipo_solicitud", ["Vacaciones", "Vacaciones Pagadas"]),
           obtenerConfigVacacionesNominaAction(),
@@ -439,7 +470,8 @@ export default function RequestForm({
                   fila.fecha_inicio,
                   fila.fecha_fin,
                   feriadosDinamicos,
-                  empresaColaborador
+                  empresaColaborador,
+                  fila.motivo
                 ).diasEfectivos
               );
             }
@@ -494,12 +526,21 @@ export default function RequestForm({
           ? "Pendiente_RH"
           : "Pendiente_Jefe";
 
+      const motivoFinal = formatearMotivoConMedioDia(
+        form.motivo,
+        medioDiaEfectivo,
+        jornadaMedioDia
+      );
+      const fechaFinGuardar = medioDiaEfectivo
+        ? form.fecha_inicio
+        : form.fecha_fin || form.fecha_inicio;
+
       const payloadBaseSolicitud = {
         colaborador_id: targetUserId,
         tipo_solicitud: tipoSolicitudLabel,
         fecha_inicio: form.fecha_inicio,
-        fecha_fin: form.fecha_fin || form.fecha_inicio,
-        motivo: form.motivo.trim() || null,
+        fecha_fin: fechaFinGuardar,
+        motivo: motivoFinal,
         estatus: estatusInicial,
       };
 
@@ -535,13 +576,15 @@ export default function RequestForm({
         {
           tipo_solicitud: tipoSolicitudLabel,
           fecha_inicio: form.fecha_inicio,
-          fecha_fin: form.fecha_fin,
+          fecha_fin: fechaFinGuardar,
+          motivo: motivoFinal,
           estatus: estatusInicial,
         },
       ]);
 
       const enviado = form;
       setForm(INITIAL_STATE);
+      setEsMedioDia(false);
       router.refresh();
       onSubmit?.(enviado);
     } catch (err) {
@@ -663,13 +706,57 @@ export default function RequestForm({
               type="date"
               name="fecha_fin"
               aria-label="Fecha de fin"
-              value={form.fecha_fin}
+              value={medioDiaEfectivo ? form.fecha_inicio : form.fecha_fin}
               min={form.fecha_inicio || undefined}
+              disabled={medioDiaEfectivo}
               onChange={handleChange}
               required
-              className={`${FIELD} h-11 flex-1 px-3 text-gray-700`}
+              className={`${FIELD} h-11 flex-1 px-3 text-gray-700 disabled:cursor-not-allowed disabled:opacity-60`}
             />
           </div>
+
+          {permiteMedioDia && (
+            <div className="mt-2.5 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-brand-gold/40 bg-brand-beige/35 px-3 py-2">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-bold text-gray-800">
+                <input
+                  type="checkbox"
+                  checked={esMedioDia}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setEsMedioDia(checked);
+                    if (checked && form.fecha_inicio) {
+                      setForm((prev) => ({
+                        ...prev,
+                        fecha_fin: prev.fecha_inicio,
+                      }));
+                    }
+                  }}
+                  className="h-4 w-4 accent-brand-dark"
+                />
+                <span>Solicitar medio día (0.5 días)</span>
+              </label>
+
+              {esMedioDia && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+                    TURNO:
+                  </span>
+                  <select
+                    value={jornadaMedioDia}
+                    onChange={(e) =>
+                      setJornadaMedioDia(
+                        e.target.value as "Matutino" | "Vespertino"
+                      )
+                    }
+                    className="h-7 rounded-sm border border-gray-300 bg-brand-surface px-2 text-[11px] font-bold text-gray-900"
+                  >
+                    <option value="Matutino">Matutino (Mañana)</option>
+                    <option value="Vespertino">Vespertino (Tarde)</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
