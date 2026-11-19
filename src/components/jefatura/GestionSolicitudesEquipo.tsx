@@ -6,6 +6,10 @@ import {
   resolverSolicitudEquipoAction,
   type DiagnosticoJefatura,
 } from "@/app/actions/jefatura";
+import {
+  esSolicitudCancelada,
+  extraerMotivoCancelacion,
+} from "@/lib/solicitudes";
 import { createClient } from "@/lib/supabase/client";
 
 interface ColaboradorEquipoRelacion {
@@ -39,15 +43,28 @@ const COLUMNAS = [
   { label: "ACCIONES", className: "text-right" },
 ] as const;
 
-function esEstatusPendiente(estatus: string | null | undefined): boolean {
+function esEstatusPendiente(
+  estatus: string | null | undefined,
+  motivo?: string | null
+): boolean {
+  if (esSolicitudCancelada(estatus, motivo)) return false;
   const limpio = (estatus ?? "").trim().toLowerCase();
   return limpio === "pendiente" || limpio === "pendiente_jefe";
 }
 
-function obtenerConfigEstatus(estatus: string | null | undefined): {
+function obtenerConfigEstatus(
+  estatus: string | null | undefined,
+  motivo?: string | null
+): {
   label: string;
   className: string;
 } {
+  if (esSolicitudCancelada(estatus, motivo)) {
+    return {
+      label: "Solicitud Cancelada",
+      className: "border-gray-400 bg-gray-100 text-gray-700",
+    };
+  }
   const limpio = (estatus ?? "").trim().toLowerCase();
 
   if (limpio === "pendiente" || limpio === "pendiente_jefe") {
@@ -474,8 +491,20 @@ export default function GestionSolicitudesEquipo() {
 
             {!isLoading &&
               solicitudes.map((solicitud) => {
-                const badge = obtenerConfigEstatus(solicitud.estatus);
-                const pendiente = esEstatusPendiente(solicitud.estatus);
+                const cancelada = esSolicitudCancelada(
+                  solicitud.estatus,
+                  solicitud.motivo
+                );
+                const { motivoOriginal, motivoCancelacion } =
+                  extraerMotivoCancelacion(solicitud.motivo);
+                const badge = obtenerConfigEstatus(
+                  solicitud.estatus,
+                  solicitud.motivo
+                );
+                const pendiente = esEstatusPendiente(
+                  solicitud.estatus,
+                  solicitud.motivo
+                );
                 const estaProcesandoFila = procesando?.id === solicitud.id;
                 const aprobandoEsta =
                   estaProcesandoFila && procesando?.accion === "aprobar";
@@ -515,7 +544,17 @@ export default function GestionSolicitudesEquipo() {
 
                     {/* 4. Motivo */}
                     <td className="max-w-xs px-6 py-4 text-xs text-gray-600">
-                      {solicitud.motivo || "Sin motivo especificado"}
+                      <div className="flex flex-col gap-1">
+                        <span>{motivoOriginal || "Sin motivo especificado"}</span>
+                        {motivoCancelacion && (
+                          <span className="rounded-sm border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] text-gray-700">
+                            <strong className="font-bold text-gray-900">
+                              Motivo de cancelación:
+                            </strong>{" "}
+                            {motivoCancelacion}
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* 5. Estatus Actual */}
@@ -555,7 +594,7 @@ export default function GestionSolicitudesEquipo() {
                         </div>
                       ) : (
                         <span className="text-[9px] font-semibold uppercase tracking-widest text-gray-400">
-                          Resuelta
+                          {cancelada ? "Cancelada" : "Resuelta"}
                         </span>
                       )}
                     </td>

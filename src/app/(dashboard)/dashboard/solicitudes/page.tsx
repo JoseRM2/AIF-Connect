@@ -5,6 +5,7 @@ import BalanceCards from "@/components/solicitudes/BalanceCards";
 import RequestList from "@/components/solicitudes/RequestList";
 import RequestsWorkspace from "@/components/solicitudes/RequestsWorkspace";
 import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
+import { esSolicitudCancelada } from "@/lib/solicitudes";
 import { createClient } from "@/lib/supabase/server";
 import type {
   EstatusSolicitud,
@@ -31,15 +32,20 @@ function normalizarTipoSolicitud(raw: string | null | undefined): TipoSolicitud 
 }
 
 function normalizarEstatusSolicitud(
-  raw: string | null | undefined
+  raw: string | null | undefined,
+  motivo?: string | null
 ): EstatusSolicitud {
+  if (esSolicitudCancelada(raw, motivo)) {
+    return "Cancelado";
+  }
   const valor = (raw ?? "").trim();
   if (
     valor === "Pendiente_Jefe" ||
     valor === "Aprobado_Jefe" ||
     valor === "Pendiente_RH" ||
     valor === "Rechazado" ||
-    valor === "Completado"
+    valor === "Completado" ||
+    valor === "Cancelado"
   ) {
     return valor;
   }
@@ -109,7 +115,7 @@ export default async function SolicitudesPage() {
       fecha_inicio: fila.fecha_inicio,
       fecha_fin: fila.fecha_fin,
       motivo: fila.motivo ?? "",
-      estatus: normalizarEstatusSolicitud(fila.estatus),
+      estatus: normalizarEstatusSolicitud(fila.estatus, fila.motivo),
     })
   );
 
@@ -117,7 +123,7 @@ export default async function SolicitudesPage() {
   const diasVacacionesPendientes = (filasSolicitudes ?? []).reduce(
     (acum, fila) => {
       const tipoRaw = (fila.tipo_solicitud ?? "").trim().toLowerCase();
-      const estatusNorm = normalizarEstatusSolicitud(fila.estatus);
+      const estatusNorm = normalizarEstatusSolicitud(fila.estatus, fila.motivo);
       if (
         tipoRaw === "vacaciones" &&
         (estatusNorm === "Pendiente_Jefe" || estatusNorm === "Pendiente_RH")

@@ -9,7 +9,9 @@ import {
 } from "@/app/actions/configuracionSolicitudes";
 import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
 import {
+  esSolicitudCancelada,
   esSolicitudMedioDia,
+  extraerMotivoCancelacion,
   formatearMotivoConMedioDia,
 } from "@/lib/solicitudes";
 import { createClient } from "@/lib/supabase/client";
@@ -71,6 +73,10 @@ const ESTATUS_BADGE: Record<
     className:
       "border-status-success bg-status-success/10 text-status-success-dark",
   },
+  Cancelado: {
+    label: "Solicitud Cancelada",
+    className: "border-gray-400 bg-gray-100 text-gray-700",
+  },
 };
 
 const FORM_INICIAL: VacacionesPagadasForm = {
@@ -96,14 +102,21 @@ const LABEL =
 const FIELD =
   "h-9 w-full rounded-sm border border-gray-300 bg-brand-surface px-3 text-xs font-medium text-gray-900 focus:border-brand-dark focus:outline-none";
 
-function normalizarEstatus(raw: string | null | undefined): EstatusSolicitud {
+function normalizarEstatus(
+  raw: string | null | undefined,
+  motivo?: string | null
+): EstatusSolicitud {
+  if (esSolicitudCancelada(raw, motivo)) {
+    return "Cancelado";
+  }
   const valor = (raw ?? "").trim();
   if (
     valor === "Pendiente_Jefe" ||
     valor === "Aprobado_Jefe" ||
     valor === "Pendiente_RH" ||
     valor === "Rechazado" ||
-    valor === "Completado"
+    valor === "Completado" ||
+    valor === "Cancelado"
   ) {
     return valor;
   }
@@ -235,7 +248,7 @@ export default function GestionSolicitudesTab() {
             fecha_inicio: item.fecha_inicio,
             fecha_fin: item.fecha_fin,
             motivo: item.motivo ?? null,
-            estatus: normalizarEstatus(item.estatus),
+            estatus: normalizarEstatus(item.estatus, item.motivo),
             created_at: item.created_at,
             colaboradores:
               (item.colaboradores as
@@ -796,7 +809,13 @@ export default function GestionSolicitudesTab() {
                   const badge =
                     ESTATUS_BADGE[solicitud.estatus] ??
                     ESTATUS_BADGE.Pendiente_Jefe;
+                  const esCancelada =
+                    solicitud.estatus === "Cancelado" ||
+                    esSolicitudCancelada(solicitud.estatus, solicitud.motivo);
+                  const { motivoOriginal, motivoCancelacion } =
+                    extraerMotivoCancelacion(solicitud.motivo);
                   const mostrarAcciones =
+                    !esCancelada &&
                     solicitud.estatus !== "Completado" &&
                     solicitud.estatus !== "Rechazado";
                   const procesando = updatingId === solicitud.id;
@@ -830,7 +849,17 @@ export default function GestionSolicitudesTab() {
                       </td>
 
                       <td className="px-6 py-4 text-xs text-gray-600">
-                        {solicitud.motivo || "-"}
+                        <div className="flex flex-col gap-1">
+                          <span>{motivoOriginal || "-"}</span>
+                          {motivoCancelacion && (
+                            <span className="rounded-sm border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] text-gray-700">
+                              <strong className="font-bold text-gray-900">
+                                Motivo de cancelación:
+                              </strong>{" "}
+                              {motivoCancelacion}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-6 py-4">
@@ -875,7 +904,7 @@ export default function GestionSolicitudesTab() {
                           </div>
                         ) : (
                           <span className="text-[9px] font-semibold uppercase tracking-widest text-gray-400">
-                            Resuelta
+                            {esCancelada ? "Cancelada" : "Resuelta"}
                           </span>
                         )}
                       </td>

@@ -6,21 +6,28 @@ import { obtenerSesionYRol } from "@/lib/auth/session";
 import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
 import { verificarOrigenPermitido } from "@/lib/security/rateLimit";
 import { sanitizarErrorPublico } from "@/lib/security/safeError";
+import {
+  anexarMotivoCancelacion,
+  esSolicitudCancelada,
+} from "@/lib/solicitudes";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface CancelarSolicitudResult {
   ok: boolean;
   error?: string;
   diasReembolsados?: number;
+  motivoActualizado?: string;
 }
 
 /**
- * Cancela (elimina) una solicitud de vacaciones o permiso del colaborador autenticado (o por RH).
- * - Si la solicitud es de tipo "Vacaciones" y ya había sido aprobada (`Aprobado_Jefe` o `Completado`),
+ * Marca una solicitud como Cancelada registrando el motivo de cancelación del colaborador
+ * para que Jefatura y RH puedan consultarlo y ya no puedan aprobarla.
+ * - Si la solicitud era de tipo "Vacaciones" y ya había sido aprobada (`Aprobado_Jefe` o `Completado`),
  *   reembolsa automáticamente los días descontados (incluyendo medios días `0.5`) a `colaboradores.saldo_vacaciones`.
  */
 export async function cancelarSolicitudAction(
-  solicitudId: string
+  solicitudId: string,
+  motivoCancelacion: string
 ): Promise<CancelarSolicitudResult> {
   try {
     if (!verificarOrigenPermitido()) {
@@ -38,6 +45,15 @@ export async function cancelarSolicitudAction(
     const idLimpio = (solicitudId ?? "").trim();
     if (!idLimpio) {
       return { ok: false, error: "Identificador de solicitud no válido." };
+    }
+
+    const motivoCancelLimpio = (motivoCancelacion ?? "").trim();
+    if (motivoCancelLimpio.length < 3) {
+      return {
+        ok: false,
+        error:
+          "Ingresa el motivo de cancelación (mínimo 3 caracteres) para informar a tu Jefatura y a RH.",
+      };
     }
 
     const db = createAdminClient();
@@ -62,6 +78,13 @@ export async function cancelarSolicitudAction(
       return {
         ok: false,
         error: "No tienes permisos para cancelar esta solicitud.",
+      };
+    }
+
+    if (esSolicitudCancelada(solicitud.estatus, solicitud.motivo)) {
+      return {
+        ok: false,
+        error: "Esta solicitud ya fue cancelada previamente.",
       };
     }
 
@@ -110,8 +133,10 @@ export async function cancelarSolicitudAction(
             .update({ saldo_vacaciones: nuevoSaldo })
             .eq("id", colab.id);
 
-          // Fallback si la columna saldo_vacaciones en BD aún es integer y nuevoSaldo tiene .5
-          if (saldoErr && /invalid input syntax for type integer/i.test(saldoErr.message)) {
+          if (
+            saldoErr &&
+            /invalid input syntax for type integer/i.test(saldoErr.message)
+          ) {
             const retryInt = await db
               .from("colaboradores")
               .update({ saldo_vacaciones: Math.round(nuevoSaldo) })
@@ -126,16 +151,37 @@ export async function cancelarSolicitudAction(
       }
     }
 
-    const { error: delErr } = await db
+    const motivoActualizado = anexarMotivoCancelacion(
+      solicitud.motivo,
+      motivoCancelLimpio
+    );
+
+    // Intentar marcar como estatus 'Cancelado' en el ENUM; si el valor aún no se agrega en BD,
+    // usar 'Rechazado' conservando la marca `[CANCELADA POR COLABORADOR: ...]` para que toda la UI la muestre como Cancelada.
+    let { error: updErr } = await db
       .from("solicitudes")
-      .delete()
+      .update({
+        estatus: "Cancelado",
+        motivo: motivoActualizado,
+      })
       .eq("id", idLimpio);
 
-    if (delErr) {
+    if (updErr && /invalid input value for enum/i.test(updErr.message)) {
+      const retry = await db
+        .from("solicitudes")
+        .update({
+          estatus: "Rechazado",
+          motivo: motivoActualizado,
+        })
+        .eq("id", idLimpio);
+      updErr = retry.error;
+    }
+
+    if (updErr) {
       return {
         ok: false,
         error: sanitizarErrorPublico(
-          delErr,
+          updErr,
           "No fue posible cancelar la solicitud."
         ),
       };
@@ -150,6 +196,7 @@ export async function cancelarSolicitudAction(
     return {
       ok: true,
       diasReembolsados,
+      motivoActualizado,
     };
   } catch (err) {
     return {

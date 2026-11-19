@@ -319,6 +319,7 @@ export interface Database {
             | "Pendiente_RH"
             | "Rechazado"
             | "Completado"
+            | "Cancelado"
             | "Pendiente"
             | "Aprobado";
           created_at: string;
@@ -339,6 +340,7 @@ export interface Database {
             | "Pendiente_RH"
             | "Rechazado"
             | "Completado"
+            | "Cancelado"
             | "Pendiente"
             | "Aprobado";
           created_at?: string;
@@ -359,6 +361,7 @@ export interface Database {
             | "Pendiente_RH"
             | "Rechazado"
             | "Completado"
+            | "Cancelado"
             | "Pendiente"
             | "Aprobado";
           created_at?: string;

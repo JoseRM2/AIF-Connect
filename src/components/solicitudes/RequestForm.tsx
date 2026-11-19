@@ -68,7 +68,11 @@ const MINIMO_DIAS_VACACIONES_PAGADAS = 5;
 
 function esEstatusRechazado(estatus: string | null | undefined): boolean {
   const limpio = (estatus ?? "").trim().toLowerCase();
-  return limpio.includes("rechaz") || limpio.includes("deneg");
+  return (
+    limpio.includes("rechaz") ||
+    limpio.includes("deneg") ||
+    limpio.includes("cancelad")
+  );
 }
 
 function esEstatusPendienteVacaciones(estatus: string | null | undefined): boolean {

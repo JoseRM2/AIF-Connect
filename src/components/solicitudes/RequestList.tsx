@@ -4,7 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cancelarSolicitudAction } from "@/app/actions/solicitudes";
 import { FileTextIcon, TrashIcon } from "@/components/ui/icons";
-import { esSolicitudMedioDia, TIPO_SOLICITUD_LABELS } from "@/lib/solicitudes";
+import {
+  esSolicitudCancelada,
+  esSolicitudMedioDia,
+  extraerMotivoCancelacion,
+  TIPO_SOLICITUD_LABELS,
+} from "@/lib/solicitudes";
 import type { EstatusSolicitud, Solicitud } from "@/types/solicitudes";
 
 const COLUMNAS: { label: string; className: string }[] = [
@@ -44,6 +49,15 @@ function obtenerEstadoVisualDosFases(
   const segundoPaso: "RH" | "JEFE" = resuelveRH ? "RH" : "JEFE";
   const pasos: ["ENVIADA", "RH" | "JEFE"] = ["ENVIADA", segundoPaso];
 
+  if (estatus === "Cancelado") {
+    return {
+      label: "Cancelada",
+      chip: "border-gray-400 bg-gray-100 text-gray-700",
+      barras: ["bg-gray-400", "bg-gray-200"],
+      pasos,
+    };
+  }
+
   if (estatus === "Rechazado") {
     return {
       label: "Rechazado",
@@ -78,11 +92,15 @@ function EstadoCell({
   onSolicitarCancelar: (sol: Solicitud) => void;
 }) {
   const resuelveRH = esResolucionPorRH(solicitud);
+  const cancelada = esSolicitudCancelada(solicitud.estatus, solicitud.motivo);
+  const estatusEfectivo: EstatusSolicitud = cancelada
+    ? "Cancelado"
+    : solicitud.estatus;
   const { label, chip, barras, pasos } = obtenerEstadoVisualDosFases(
-    solicitud.estatus,
+    estatusEfectivo,
     resuelveRH
   );
-  const puedeCancelar = solicitud.estatus !== "Rechazado";
+  const puedeCancelar = !cancelada && solicitud.estatus !== "Rechazado";
 
   return (
     <div role="cell" className="col-span-3 flex flex-col items-end gap-1.5">
@@ -133,6 +151,7 @@ export default function RequestList({
   const [listaLocal, setListaLocal] = useState<Solicitud[]>(solicitudes);
   const [solicitudACancelar, setSolicitudACancelar] =
     useState<Solicitud | null>(null);
+  const [motivoCancelacion, setMotivoCancelacion] = useState<string>("");
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
   const [errorCancelar, setErrorCancelar] = useState<string | null>(null);
 
@@ -142,19 +161,38 @@ export default function RequestList({
 
   const handleConfirmarCancelacion = async () => {
     if (!solicitudACancelar || cancelandoId) return;
+    const motivoLimpio = motivoCancelacion.trim();
+    if (motivoLimpio.length < 3) {
+      setErrorCancelar(
+        "Por favor ingresa el motivo de cancelación (mínimo 3 caracteres)."
+      );
+      return;
+    }
+
     const idTarget = solicitudACancelar.id;
     setCancelandoId(idTarget);
     setErrorCancelar(null);
 
     try {
-      const res = await cancelarSolicitudAction(idTarget);
+      const res = await cancelarSolicitudAction(idTarget, motivoLimpio);
       if (!res.ok) {
         setErrorCancelar(res.error || "No se pudo cancelar la solicitud.");
         return;
       }
 
-      setListaLocal((prev) => prev.filter((item) => item.id !== idTarget));
+      setListaLocal((prev) =>
+        prev.map((item) =>
+          item.id === idTarget
+            ? {
+                ...item,
+                estatus: "Cancelado",
+                motivo: res.motivoActualizado ?? item.motivo,
+              }
+            : item
+        )
+      );
       setSolicitudACancelar(null);
+      setMotivoCancelacion("");
       router.refresh();
     } finally {
       setCancelandoId(null);
@@ -238,11 +276,31 @@ export default function RequestList({
                       role="cell"
                       className="col-span-3 text-xs text-gray-600"
                     >
-                      {s.motivo || "-"}
+                      {(() => {
+                        const { motivoOriginal, motivoCancelacion: motCancel } =
+                          extraerMotivoCancelacion(s.motivo);
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <span>{motivoOriginal || "-"}</span>
+                            {motCancel && (
+                              <span className="rounded-sm border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] text-gray-700">
+                                <strong className="font-bold text-gray-900">
+                                  Motivo de cancelación:
+                                </strong>{" "}
+                                {motCancel}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                     <EstadoCell
                       solicitud={s}
-                      onSolicitarCancelar={setSolicitudACancelar}
+                      onSolicitarCancelar={(sol) => {
+                        setErrorCancelar(null);
+                        setMotivoCancelacion("");
+                        setSolicitudACancelar(sol);
+                      }}
                     />
                   </div>
                 );
@@ -292,8 +350,39 @@ export default function RequestList({
                     : `${solicitudACancelar.fecha_inicio} al ${solicitudACancelar.fecha_fin}`}
                 </p>
               </div>
+              <div>
+                <label
+                  htmlFor="motivo-cancelacion-solicitud"
+                  className="mb-1.5 block text-[9px] font-bold uppercase tracking-widest text-gray-600"
+                >
+                  MOTIVO DE CANCELACIÓN * (VISIBLE PARA JEFATURA Y RH)
+                </label>
+                <textarea
+                  id="motivo-cancelacion-solicitud"
+                  rows={3}
+                  required
+                  maxLength={500}
+                  value={motivoCancelacion}
+                  onChange={(e) => {
+                    setMotivoCancelacion(e.target.value);
+                    if (errorCancelar) setErrorCancelar(null);
+                  }}
+                  placeholder="Explica brevemente por qué cancelas esta solicitud..."
+                  className="w-full resize-y rounded-sm border border-gray-300 bg-brand-surface p-2.5 text-xs text-gray-900 outline-none focus:border-brand-dark"
+                />
+              </div>
+
+              {errorCancelar && (
+                <p
+                  role="alert"
+                  className="text-[11px] font-bold text-status-danger-dark"
+                >
+                  {errorCancelar}
+                </p>
+              )}
+
               <p className="text-[11px] text-gray-500">
-                Si la solicitud correspondía a Vacaciones y ya había sido aprobada, los días descontados se reembolsarán automáticamente a tu saldo disponible.
+                La solicitud quedará marcada como <strong>Cancelada</strong> para tu Jefatura y RH (ya no podrá ser aprobada). Si ya había sido aprobada, tus días de vacaciones se reembolsarán automáticamente.
               </p>
             </div>
 

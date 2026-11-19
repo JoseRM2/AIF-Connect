@@ -5,6 +5,7 @@ import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
 import { registrarEventoAuditoria } from "@/lib/security/auditLog";
 import { verificarOrigenPermitido } from "@/lib/security/rateLimit";
 import { sanitizarErrorPublico } from "@/lib/security/safeError";
+import { esSolicitudCancelada } from "@/lib/solicitudes";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 
@@ -262,6 +263,14 @@ export async function resolverSolicitudEquipoAction(
       return {
         ok: false,
         error: "No se encontró la solicitud especificada.",
+      };
+    }
+
+    if (esSolicitudCancelada(solicitud.estatus, solicitud.motivo)) {
+      return {
+        ok: false,
+        error:
+          "Esta solicitud fue cancelada por el colaborador y ya no puede ser aprobada ni modificada.",
       };
     }
 

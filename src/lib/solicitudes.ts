@@ -56,6 +56,65 @@ export function formatearMotivoConMedioDia(
   return limpio ? `${prefijo} ${limpio}` : prefijo;
 }
 
+const REGEX_MARCA_CANCELACION =
+  /\[CANCELADA POR COLABORADOR:\s*([^\]]+)\]/i;
+
+/**
+ * Determina si una solicitud fue cancelada por el colaborador (ya sea por `estatus === 'Cancelado'`
+ * o por la marca `[CANCELADA POR COLABORADOR: ...]` en `motivo`).
+ */
+export function esSolicitudCancelada(
+  estatus: string | null | undefined,
+  motivo?: string | null
+): boolean {
+  const estNorm = (estatus ?? "").trim().toLowerCase();
+  if (estNorm === "cancelado" || estNorm === "cancelada") {
+    return true;
+  }
+  return REGEX_MARCA_CANCELACION.test(motivo ?? "");
+}
+
+/**
+ * Separa el motivo original de la solicitud y el motivo de cancelación registrado por el usuario.
+ */
+export function extraerMotivoCancelacion(motivo: string | null | undefined): {
+  motivoOriginal: string;
+  motivoCancelacion: string | null;
+} {
+  const raw = (motivo ?? "").trim();
+  if (!raw) {
+    return { motivoOriginal: "", motivoCancelacion: null };
+  }
+  const match = raw.match(REGEX_MARCA_CANCELACION);
+  if (!match) {
+    return { motivoOriginal: raw, motivoCancelacion: null };
+  }
+  const motivoCancelacion = (match[1] ?? "").trim() || null;
+  const motivoOriginal = raw
+    .replace(REGEX_MARCA_CANCELACION, "")
+    .replace(/\s*\|\s*$/, "")
+    .trim();
+
+  return { motivoOriginal, motivoCancelacion };
+}
+
+/**
+ * Combina el motivo original con el motivo de cancelación del colaborador en formato trazable.
+ */
+export function anexarMotivoCancelacion(
+  motivoOriginal: string | null | undefined,
+  motivoCancelacion: string
+): string {
+  const baseLimpia = extraerMotivoCancelacion(motivoOriginal).motivoOriginal;
+  const cancelLimpio = motivoCancelacion
+    .replace(/[\[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+  const marca = `[CANCELADA POR COLABORADOR: ${cancelLimpio}]`;
+  return baseLimpia ? `${baseLimpia} | ${marca}` : marca;
+}
+
 export const MESES_NOMBRES = [
   "enero",
   "febrero",

@@ -18,7 +18,8 @@ export type EstatusSolicitud =
   | "Aprobado_Jefe"
   | "Pendiente_RH"
   | "Rechazado"
-  | "Completado";
+  | "Completado"
+  | "Cancelado";
 
 /** Fila de la tabla `solicitudes`. Fechas en formato "YYYY-MM-DD". */
 export interface Solicitud {
