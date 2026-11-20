@@ -354,25 +354,20 @@ export default function GestionSolicitudesTab() {
         }
       }
 
-      // Si se aprueba ('Completado') y es de tipo 'Vacaciones' o 'Vacaciones Pagadas', descontar días del saldo_vacaciones
+      // Si se aprueba ('Completado') y es de tipo 'Vacaciones' o 'Vacaciones Pagadas', descontar días hábiles (lun-vie, sin feriados) del saldo_vacaciones
       if (newStatus === "Completado" && (esVacaciones || esVacacionesPagadas)) {
         const feriadosDinamicos = await obtenerFeriadosDinamicosAction();
         const colabCatalogo = colaboradores.find(
           (c) => c.id === solicitud.colaborador_id
         );
         const empresaColab = (colabCatalogo?.empresa ?? "AIF").trim() || "AIF";
-        const diasSolicitados = esVacacionesPagadas
-          ? calcularDiasSolicitados(
-              solicitud.fecha_inicio,
-              solicitud.fecha_fin
-            )
-          : calcularDiasEfectivosSinFeriados(
-              solicitud.fecha_inicio,
-              solicitud.fecha_fin,
-              Array.isArray(feriadosDinamicos) ? feriadosDinamicos : [],
-              empresaColab,
-              solicitud.motivo
-            ).diasEfectivos;
+        const diasSolicitados = calcularDiasEfectivosSinFeriados(
+          solicitud.fecha_inicio,
+          solicitud.fecha_fin,
+          Array.isArray(feriadosDinamicos) ? feriadosDinamicos : [],
+          empresaColab,
+          solicitud.motivo
+        ).diasEfectivos;
         const saldoActual = obtenerSaldoColaborador(solicitud.colaboradores);
 
         if (diasSolicitados > saldoActual) {
@@ -504,10 +499,15 @@ export default function GestionSolicitudesTab() {
     const tipoElegido: TipoAsignacionDirectaRh =
       form.tipo_solicitud || "Vacaciones";
 
-    const diasPorRango = calcularDiasSolicitados(
-      fechaInicioEfectiva,
-      fechaFinEfectiva
-    );
+    const esTipoVacacionesRh =
+      tipoElegido === "Vacaciones" || tipoElegido === "Vacaciones Pagadas";
+
+    const diasPorRango = esTipoVacacionesRh
+      ? calcularDiasEfectivosSinFeriados(
+          fechaInicioEfectiva,
+          fechaFinEfectiva
+        ).diasEfectivos
+      : calcularDiasSolicitados(fechaInicioEfectiva, fechaFinEfectiva);
     const dias = medioDiaRhEfectivo
       ? 0.5
       : Math.max(0.5, Number(form.dias_a_pagar) || diasPorRango || 1);
@@ -1198,10 +1198,13 @@ export default function GestionSolicitudesTab() {
                       prev.fecha_fin < nuevaInicio
                         ? nuevaInicio
                         : prev.fecha_fin;
-                    const diasRango = calcularDiasSolicitados(
-                      nuevaInicio,
-                      nuevaFin
-                    );
+                    const esVacTipo =
+                      prev.tipo_solicitud === "Vacaciones" ||
+                      prev.tipo_solicitud === "Vacaciones Pagadas";
+                    const diasRango = esVacTipo
+                      ? calcularDiasEfectivosSinFeriados(nuevaInicio, nuevaFin)
+                          .diasEfectivos
+                      : calcularDiasSolicitados(nuevaInicio, nuevaFin);
                     return {
                       ...prev,
                       fecha_inicio: nuevaInicio,
@@ -1232,10 +1235,15 @@ export default function GestionSolicitudesTab() {
                 onChange={(e) => {
                   const nuevaFin = e.target.value;
                   setForm((prev) => {
-                    const diasRango = calcularDiasSolicitados(
-                      prev.fecha_inicio,
-                      nuevaFin
-                    );
+                    const esVacTipo =
+                      prev.tipo_solicitud === "Vacaciones" ||
+                      prev.tipo_solicitud === "Vacaciones Pagadas";
+                    const diasRango = esVacTipo
+                      ? calcularDiasEfectivosSinFeriados(
+                          prev.fecha_inicio,
+                          nuevaFin
+                        ).diasEfectivos
+                      : calcularDiasSolicitados(prev.fecha_inicio, nuevaFin);
                     return {
                       ...prev,
                       fecha_fin: nuevaFin,

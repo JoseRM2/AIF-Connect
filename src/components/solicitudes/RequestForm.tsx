@@ -295,7 +295,7 @@ export default function RequestForm({
     if (medioDiaEfectivo && form.fecha_inicio) {
       return calculoRangoActual.diasEfectivos > 0 ? 0.5 : 0;
     }
-    return form.tipo === "vacaciones"
+    return form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas"
       ? calculoRangoActual.diasEfectivos
       : calcularDiasSolicitados(form.fecha_inicio, form.fecha_fin);
   }, [
@@ -374,7 +374,7 @@ export default function RequestForm({
 
     if (diasSolicitados <= 0) {
       setErrorMsg(
-        "El día seleccionado corresponde a un día feriado inhábil (no requiere descontar vacaciones)."
+        "El rango seleccionado solo incluye fines de semana o días feriados inhábiles (no requiere descontar vacaciones)."
       );
       return;
     }
@@ -662,24 +662,6 @@ export default function RequestForm({
           )}
         </div>
       </div>
-
-      {form.tipo === "vacaciones" &&
-        calculoRangoActual.feriadosEnRango.length > 0 && (
-          <div className="rounded-sm border border-status-info/40 bg-status-info/10 px-4 py-2.5 text-xs font-medium text-status-info-dark">
-            ✓ El rango seleccionado incluye{" "}
-            <strong>
-              {calculoRangoActual.feriadosEnRango.length}{" "}
-              {calculoRangoActual.feriadosEnRango.length === 1
-                ? "día feriado"
-                : "días feriados"}
-            </strong>{" "}
-            (
-            {calculoRangoActual.feriadosEnRango
-              .map((f) => `${f.titulo} [${f.fecha}]`)
-              .join(", ")}
-            ), los cuales <strong>no se descuentan</strong> de tu saldo de vacaciones.
-          </div>
-        )}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <div>

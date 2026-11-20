@@ -19,6 +19,23 @@ export interface EventoAuditoriaPayload {
   detalles?: Record<string, unknown>;
 }
 
+function formatearHoraMexico(fecha: Date): string {
+  try {
+    return new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "America/Mexico_City",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(fecha);
+  } catch {
+    return fecha.toISOString();
+  }
+}
+
 /**
  * Registra de forma asíncrona y no bloqueante un evento relevante de seguridad
  * tanto en la salida estructurada del servidor como en `public.bitacora_auditoria_seguridad` (si existe).
@@ -27,7 +44,9 @@ export async function registrarEventoAuditoria(
   payload: EventoAuditoriaPayload
 ): Promise<void> {
   const ip = obtenerIpSolicitante();
-  const timestamp = new Date().toISOString();
+  const ahora = new Date();
+  const timestamp = ahora.toISOString();
+  const horaMexico = formatearHoraMexico(ahora);
 
   try {
     // 1. Intentar persistir en la tabla de auditoría en PostgreSQL (sin bloquear si aún no se ha corrido el SQL del Punto 5)
@@ -38,7 +57,10 @@ export async function registrarEventoAuditoria(
       actor_email: payload.actorEmail ?? null,
       objetivo_id: payload.objetivoId ?? null,
       ip_origen: ip,
-      detalles: payload.detalles ?? {},
+      detalles: {
+        ...(payload.detalles ?? {}),
+        hora_mexico: `${horaMexico} (America/Mexico_City)`,
+      },
       created_at: timestamp,
     } as never);
   } catch {

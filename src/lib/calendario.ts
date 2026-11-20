@@ -358,8 +358,9 @@ export function construirMapaFeriadosPorAnio(
 }
 
 /**
- * Calcula los días solicitados entre `fechaInicio` y `fechaFin` descontando automáticamente
- * los días feriados oficiales (LFT) y los días feriados dinámicos de la empresa dados de alta por RH.
+ * Calcula los días hábiles solicitados entre `fechaInicio` y `fechaFin` contemplando
+ * jornada laboral de lunes a viernes (excluye automáticamente sábados y domingos),
+ * así como los días feriados oficiales (LFT) y días feriados dinámicos de la empresa dados de alta por RH.
  */
 export function calcularDiasEfectivosSinFeriados(
   fechaInicio: string,
@@ -369,23 +370,39 @@ export function calcularDiasEfectivosSinFeriados(
   motivoODias?: string | number | null
 ): {
   diasNaturales: number;
+  diasFinDeSemana: number;
   diasEfectivos: number;
   feriadosEnRango: Array<{ fecha: string; titulo: string }>;
 } {
   if (!fechaInicio || !fechaFin) {
-    return { diasNaturales: 0, diasEfectivos: 0, feriadosEnRango: [] };
+    return {
+      diasNaturales: 0,
+      diasFinDeSemana: 0,
+      diasEfectivos: 0,
+      feriadosEnRango: [],
+    };
   }
 
   const [y1, m1, d1] = fechaInicio.slice(0, 10).split("-").map(Number);
   const [y2, m2, d2] = fechaFin.slice(0, 10).split("-").map(Number);
   if (!y1 || !m1 || !d1 || !y2 || !m2 || !d2) {
-    return { diasNaturales: 0, diasEfectivos: 0, feriadosEnRango: [] };
+    return {
+      diasNaturales: 0,
+      diasFinDeSemana: 0,
+      diasEfectivos: 0,
+      feriadosEnRango: [],
+    };
   }
 
   const inicioUtc = Date.UTC(y1, m1 - 1, d1);
   const finUtc = Date.UTC(y2, m2 - 1, d2);
   if (finUtc < inicioUtc) {
-    return { diasNaturales: 0, diasEfectivos: 0, feriadosEnRango: [] };
+    return {
+      diasNaturales: 0,
+      diasFinDeSemana: 0,
+      diasEfectivos: 0,
+      feriadosEnRango: [],
+    };
   }
 
   const mapasPorAnio = new Map<
@@ -402,11 +419,20 @@ export function calcularDiasEfectivosSinFeriados(
 
   const MS_POR_DIA = 86_400_000;
   let diasNaturales = 0;
+  let diasFinDeSemana = 0;
+  let diasHabilesSinFeriados = 0;
   const feriadosEnRango: Array<{ fecha: string; titulo: string }> = [];
 
   for (let ms = inicioUtc; ms <= finUtc; ms += MS_POR_DIA) {
     diasNaturales += 1;
     const d = new Date(ms);
+    const diaSemana = d.getUTCDay(); // 0 = Domingo, 6 = Sábado
+
+    if (diaSemana === 0 || diaSemana === 6) {
+      diasFinDeSemana += 1;
+      continue;
+    }
+
     const anio = d.getUTCFullYear();
     const mes = d.getUTCMonth() + 1;
     const dia = d.getUTCDate();
@@ -414,13 +440,10 @@ export function calcularDiasEfectivosSinFeriados(
     const feriado = mapasPorAnio.get(anio)?.get(iso);
     if (feriado) {
       feriadosEnRango.push({ fecha: iso, titulo: feriado.titulo });
+    } else {
+      diasHabilesSinFeriados += 1;
     }
   }
-
-  const diasEfectivosEnteros = Math.max(
-    0,
-    diasNaturales - feriadosEnRango.length
-  );
 
   const esMedioDia =
     (typeof motivoODias === "number" && motivoODias === 0.5) ||
@@ -428,9 +451,14 @@ export function calcularDiasEfectivosSinFeriados(
       /\[MEDIO D[ÍI]A|\(0\.5 D[ÍI]A/i.test(motivoODias));
 
   const diasEfectivos =
-    esMedioDia && diasEfectivosEnteros > 0 ? 0.5 : diasEfectivosEnteros;
+    esMedioDia && diasHabilesSinFeriados > 0 ? 0.5 : diasHabilesSinFeriados;
 
-  return { diasNaturales, diasEfectivos, feriadosEnRango };
+  return {
+    diasNaturales,
+    diasFinDeSemana,
+    diasEfectivos,
+    feriadosEnRango,
+  };
 }
 
 /**
