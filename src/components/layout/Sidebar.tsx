@@ -46,6 +46,11 @@ const NAV_ITEMS_JEFATURA: NavItem[] = [
     href: "/dashboard/jefatura",
     icon: FileTextIcon,
   },
+  {
+    label: "Monitor de Asistencia",
+    href: "/dashboard/jefatura/asistencia",
+    icon: ClockIcon,
+  },
 ];
 
 const NAV_ITEMS_RH: NavItem[] = [
@@ -76,7 +81,9 @@ export default function Sidebar({
   const esAdminSistema = Boolean(esAdminSistemaProp ?? esAdminSistemaContexto);
 
   const isActive = (href: string) =>
-    href === "/dashboard" ? pathname === href : pathname.startsWith(href);
+    href === "/dashboard" || href === "/dashboard/jefatura"
+      ? pathname === href
+      : pathname.startsWith(href);
 
   const handleLogout = async () => {
     limpiarMarcaActividadSesion();

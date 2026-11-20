@@ -236,6 +236,16 @@ export default async function AsistenciaPage() {
             horaInicioDescansoHoy={horaInicioDescansoHoy}
             horaFinDescansoHoy={horaFinDescansoHoy}
             horaSalidaHoy={horaSalidaHoy}
+            ubicacionInicioDescansoHoy={
+              tieneRegistroHoy
+                ? (registroHoy?.ubicacion_inicio_descanso ?? null)
+                : null
+            }
+            ubicacionFinDescansoHoy={
+              tieneRegistroHoy
+                ? (registroHoy?.ubicacion_fin_descanso ?? null)
+                : null
+            }
           />
 
           {/* Tarjeta: Tus Ubicaciones Autorizadas (reemplaza al Simulador GPS) */}

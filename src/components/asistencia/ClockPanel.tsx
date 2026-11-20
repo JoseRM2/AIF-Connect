@@ -40,6 +40,11 @@ type CheckInStatus =
   | "out_of_range"
   | "error";
 
+interface TramoDescanso {
+  inicio: string;
+  fin: string | null;
+}
+
 interface ClockPanelProps {
   /** `colaboradores.zonas_geocerca` */
   zonas: ZonaGeocerca[];
@@ -53,11 +58,91 @@ interface ClockPanelProps {
   horaInicioDescansoHoy?: string | null;
   horaFinDescansoHoy?: string | null;
   horaSalidaHoy?: string | null;
+  ubicacionInicioDescansoHoy?: unknown;
+  ubicacionFinDescansoHoy?: unknown;
   onCheckIn?: (ubicacion: UbicacionMarcaje) => void;
 }
 
 const COOLDOWN_SALIDA_MINUTOS = 15;
+const COOLDOWN_DESCANSO_SEGUNDOS = 5 * 60;
 const HORA_FIN_JORNADA_24 = 18;
+
+function calcularMinutosTramosCompletados(tramos: TramoDescanso[]): number {
+  let total = 0;
+  for (const t of tramos) {
+    if (t.inicio && t.fin) {
+      const m = calcularMinutosDescanso(t.inicio, t.fin);
+      if (m !== null && m > 0) {
+        total += m;
+      }
+    }
+  }
+  return total;
+}
+
+function extraerMetaDescanso(
+  ubicacionInicio: unknown,
+  ubicacionFin: unknown,
+  horaInicio: string | null | undefined,
+  horaFin: string | null | undefined
+): {
+  tramos: TramoDescanso[];
+  ultimoEventoMs: number | null;
+} {
+  const leerObj = (raw: unknown): Record<string, unknown> | null =>
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : null;
+
+  const objIni = leerObj(ubicacionInicio);
+  const objFin = leerObj(ubicacionFin);
+
+  const msIni =
+    typeof objIni?.ultimo_evento_descanso_ms === "number"
+      ? objIni.ultimo_evento_descanso_ms
+      : null;
+  const msFin =
+    typeof objFin?.ultimo_evento_descanso_ms === "number"
+      ? objFin.ultimo_evento_descanso_ms
+      : null;
+
+  const fuenteMasReciente =
+    msFin !== null && (msIni === null || msFin >= msIni)
+      ? objFin
+      : objIni ?? objFin;
+
+  let tramos: TramoDescanso[] = [];
+  if (Array.isArray(fuenteMasReciente?.tramos_descanso)) {
+    tramos = (fuenteMasReciente.tramos_descanso as unknown[])
+      .filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === "object"
+      )
+      .map((item) => ({
+        inicio: typeof item.inicio === "string" ? item.inicio : "",
+        fin: typeof item.fin === "string" ? item.fin : null,
+      }))
+      .filter((t) => Boolean(t.inicio));
+  }
+
+  if (tramos.length === 0 && horaInicio) {
+    tramos = [{ inicio: horaInicio, fin: horaFin ?? null }];
+  }
+
+  const ultimoEventoMs =
+    msFin !== null && msIni !== null
+      ? Math.max(msFin, msIni)
+      : msFin ?? msIni ?? null;
+
+  return { tramos, ultimoEventoMs };
+}
+
+function formatearCooldownMmSs(segundosTotales: number): string {
+  const seg = Math.max(0, Math.ceil(segundosTotales));
+  const min = Math.floor(seg / 60);
+  const rem = seg % 60;
+  return `${min}:${String(rem).padStart(2, "0")}`;
+}
 
 const BUTTON_STYLES: Record<CheckInStatus, string> = {
   idle: "bg-brand-dark hover:bg-brand-dark/90",
@@ -158,6 +243,8 @@ export default function ClockPanel({
   horaInicioDescansoHoy = null,
   horaFinDescansoHoy = null,
   horaSalidaHoy = null,
+  ubicacionInicioDescansoHoy = null,
+  ubicacionFinDescansoHoy = null,
   onCheckIn,
 }: ClockPanelProps) {
   const router = useRouter();
@@ -200,13 +287,70 @@ export default function ClockPanel({
     string | null
   >(horaSalidaHoy);
 
+  const metaDescansoInicial = useMemo(
+    () =>
+      extraerMetaDescanso(
+        ubicacionInicioDescansoHoy,
+        ubicacionFinDescansoHoy,
+        horaInicioDescansoHoy,
+        horaFinDescansoHoy
+      ),
+    [
+      ubicacionInicioDescansoHoy,
+      ubicacionFinDescansoHoy,
+      horaInicioDescansoHoy,
+      horaFinDescansoHoy,
+    ]
+  );
+
+  const [tramosDescanso, setTramosDescanso] = useState<TramoDescanso[]>(
+    metaDescansoInicial.tramos
+  );
+  const [ultimoEventoDescansoMs, setUltimoEventoDescansoMs] = useState<
+    number | null
+  >(metaDescansoInicial.ultimoEventoMs);
+
+  const minutosDescansoAcumulados = useMemo(() => {
+    const porTramos = calcularMinutosTramosCompletados(tramosDescanso);
+    if (porTramos > 0) return porTramos;
+    if (tieneFinDescanso) {
+      return (
+        calcularMinutosDescanso(
+          horaInicioDescansoRegistrada,
+          horaFinDescansoRegistrada
+        ) ?? 0
+      );
+    }
+    return 0;
+  }, [
+    tramosDescanso,
+    tieneFinDescanso,
+    horaInicioDescansoRegistrada,
+    horaFinDescansoRegistrada,
+  ]);
+
+  const minutosRestantesDescanso = Math.max(
+    0,
+    LIMITE_DESCANSO_MINUTOS - minutosDescansoAcumulados
+  );
+
   const jornadaCompletada = tieneEntrada && tieneSalida;
   const enDescanso =
     tieneEntrada && tieneInicioDescanso && !tieneFinDescanso && !tieneSalida;
-  const descansoCompletado =
-    tieneEntrada && tieneInicioDescanso && tieneFinDescanso && !tieneSalida;
   const puedeIniciarDescanso =
     tieneEntrada && !tieneInicioDescanso && !tieneSalida;
+  const puedeContinuarDescanso =
+    tieneEntrada &&
+    tieneInicioDescanso &&
+    tieneFinDescanso &&
+    !tieneSalida &&
+    minutosDescansoAcumulados < LIMITE_DESCANSO_MINUTOS;
+  const descansoCompletado =
+    tieneEntrada &&
+    tieneInicioDescanso &&
+    tieneFinDescanso &&
+    !tieneSalida &&
+    minutosDescansoAcumulados >= LIMITE_DESCANSO_MINUTOS;
   const esModoSalida = tieneEntrada && !tieneSalida && !enDescanso;
 
   const [ahora, setAhora] = useState<Date | null>(null);
@@ -243,6 +387,14 @@ export default function ClockPanel({
     setHoraInicioDescansoRegistrada(horaInicioDescansoHoy);
     setHoraFinDescansoRegistrada(horaFinDescansoHoy);
     setHoraSalidaRegistrada(horaSalidaHoy);
+    const meta = extraerMetaDescanso(
+      ubicacionInicioDescansoHoy,
+      ubicacionFinDescansoHoy,
+      horaInicioDescansoHoy,
+      horaFinDescansoHoy
+    );
+    setTramosDescanso(meta.tramos);
+    setUltimoEventoDescansoMs(meta.ultimoEventoMs);
     setStatus(entradaActiva && salidaActiva ? "completed" : "idle");
   }, [
     asistenciaHoyId,
@@ -250,6 +402,8 @@ export default function ClockPanel({
     horaInicioDescansoHoy,
     horaFinDescansoHoy,
     horaSalidaHoy,
+    ubicacionInicioDescansoHoy,
+    ubicacionFinDescansoHoy,
     yaMarcoHoy,
   ]);
 
@@ -333,6 +487,14 @@ export default function ClockPanel({
         );
         setHoraFinDescansoRegistrada(registroHoy.hora_fin_descanso ?? null);
         setHoraSalidaRegistrada(registroHoy.hora_salida ?? null);
+        const meta = extraerMetaDescanso(
+          registroHoy.ubicacion_inicio_descanso,
+          registroHoy.ubicacion_fin_descanso,
+          registroHoy.hora_inicio_descanso,
+          registroHoy.hora_fin_descanso
+        );
+        setTramosDescanso(meta.tramos);
+        setUltimoEventoDescansoMs(meta.ultimoEventoMs);
         setStatus(entradaActiva && salidaActiva ? "completed" : "idle");
       } else {
         setRegistroId(null);
@@ -344,6 +506,8 @@ export default function ClockPanel({
         setHoraInicioDescansoRegistrada(null);
         setHoraFinDescansoRegistrada(null);
         setHoraSalidaRegistrada(null);
+        setTramosDescanso([]);
+        setUltimoEventoDescansoMs(null);
         setStatus("idle");
         setMensajeError(null);
       }
@@ -366,22 +530,36 @@ export default function ClockPanel({
 
   const salidaBloqueadaPorCooldown = esModoSalida && minutosEsperaSalida > 0;
 
-  const minutosDescansoRegistrados = useMemo(
-    () =>
-      calcularMinutosDescanso(
-        horaInicioDescansoRegistrada,
-        horaFinDescansoRegistrada
-      ),
-    [horaInicioDescansoRegistrada, horaFinDescansoRegistrada]
-  );
+  const minutosDescansoRegistrados = useMemo(() => {
+    if (!tieneInicioDescanso || !tieneFinDescanso) return null;
+    return minutosDescansoAcumulados;
+  }, [tieneInicioDescanso, tieneFinDescanso, minutosDescansoAcumulados]);
 
   const minutosDescansoEnCurso = useMemo(() => {
     if (!enDescanso || !ahora || !horaInicioDescansoRegistrada) return null;
     const inicioMin = parsearHoraAMinutos(horaInicioDescansoRegistrada);
     if (inicioMin === null) return null;
     const actualMin = ahora.getHours() * 60 + ahora.getMinutes();
-    return Math.max(0, actualMin - inicioMin);
-  }, [ahora, enDescanso, horaInicioDescansoRegistrada]);
+    return minutosDescansoAcumulados + Math.max(0, actualMin - inicioMin);
+  }, [
+    ahora,
+    enDescanso,
+    horaInicioDescansoRegistrada,
+    minutosDescansoAcumulados,
+  ]);
+
+  const segundosEsperaDescanso = useMemo(() => {
+    if (!ahora || ultimoEventoDescansoMs === null) return 0;
+    const transcurridosSeg = Math.floor(
+      (ahora.getTime() - ultimoEventoDescansoMs) / 1000
+    );
+    if (transcurridosSeg < 0) return COOLDOWN_DESCANSO_SEGUNDOS;
+    return transcurridosSeg < COOLDOWN_DESCANSO_SEGUNDOS
+      ? COOLDOWN_DESCANSO_SEGUNDOS - transcurridosSeg
+      : 0;
+  }, [ahora, ultimoEventoDescansoMs]);
+
+  const descansoBloqueadoPorCooldown = segundosEsperaDescanso > 0;
 
   const evaluacion = useMemo(() => {
     if (!puntoReal) return null;
@@ -580,12 +758,16 @@ export default function ClockPanel({
   /**
    * Flujo de Inicio de Descanso (Iniciar Descanso) con validación de GPS y geocerca.
    */
+  /**
+   * Flujo de Inicio o Continuación de Descanso con validación de GPS, geocerca y cooldown de 5 minutos.
+   */
   const handleIniciarDescanso = async () => {
     if (
       enProcesoRef.current ||
       isLoading ||
       isLocating ||
-      !puedeIniciarDescanso
+      descansoBloqueadoPorCooldown ||
+      (!puedeIniciarDescanso && !puedeContinuarDescanso)
     )
       return;
     enProcesoRef.current = true;
@@ -601,7 +783,7 @@ export default function ClockPanel({
       if (!enRango) {
         setStatus("out_of_range");
         setMensajeError(
-          "Estás fuera de tu zona autorizada. Acércate a la oficina o punto de trabajo para iniciar tu descanso."
+          "Estás fuera de tu zona autorizada. Acércate a la oficina o punto de trabajo para iniciar o continuar tu descanso."
         );
         return;
       }
@@ -628,10 +810,28 @@ export default function ClockPanel({
       const min = String(fechaActual.getMinutes()).padStart(2, "0");
       const ss = String(fechaActual.getSeconds()).padStart(2, "0");
       const horaActualStr = `${hh}:${min}:${ss}`;
+      const ahoraMs = Date.now();
+
+      const tramosPreviosCompletos = tramosDescanso.filter((t) => Boolean(t.fin));
+      const nuevosTramos: TramoDescanso[] = [
+        ...tramosPreviosCompletos,
+        { inicio: horaActualStr, fin: null },
+      ];
+      const acumuladosPrevios = calcularMinutosTramosCompletados(
+        tramosPreviosCompletos
+      );
+
+      const ubicacionInicioEnriquecida = {
+        ...ubicacionJsonb,
+        tramos_descanso: nuevosTramos,
+        minutos_acumulados: acumuladosPrevios,
+        ultimo_evento_descanso_ms: ahoraMs,
+      };
 
       const query = supabase.from("asistencias").update({
         hora_inicio_descanso: horaActualStr,
-        ubicacion_inicio_descanso: ubicacionJsonb as unknown as Json,
+        hora_fin_descanso: null,
+        ubicacion_inicio_descanso: ubicacionInicioEnriquecida as unknown as Json,
       });
 
       const { error: updateError } = registroId
@@ -647,7 +847,11 @@ export default function ClockPanel({
       }
 
       setTieneInicioDescanso(true);
+      setTieneFinDescanso(false);
       setHoraInicioDescansoRegistrada(horaActualStr);
+      setHoraFinDescansoRegistrada(null);
+      setTramosDescanso(nuevosTramos);
+      setUltimoEventoDescansoMs(ahoraMs);
       setStatus("idle");
       onCheckIn?.(marcajePayload);
       router.refresh();
@@ -666,10 +870,17 @@ export default function ClockPanel({
   };
 
   /**
-   * Flujo de Fin de Descanso (Regresar a Actividades) con validación de GPS y geocerca.
+   * Flujo de Fin de Descanso (Regresar a Actividades) con validación de GPS, geocerca y cooldown de 5 minutos.
    */
   const handleFinalizarDescanso = async () => {
-    if (enProcesoRef.current || isLoading || isLocating || !enDescanso) return;
+    if (
+      enProcesoRef.current ||
+      isLoading ||
+      isLocating ||
+      !enDescanso ||
+      descansoBloqueadoPorCooldown
+    )
+      return;
     enProcesoRef.current = true;
 
     setIsLoading(true);
@@ -710,10 +921,35 @@ export default function ClockPanel({
       const min = String(fechaActual.getMinutes()).padStart(2, "0");
       const ss = String(fechaActual.getSeconds()).padStart(2, "0");
       const horaActualStr = `${hh}:${min}:${ss}`;
+      const ahoraMs = Date.now();
+
+      const tramosActualizados: TramoDescanso[] =
+        tramosDescanso.length > 0
+          ? tramosDescanso.map((t, idx) =>
+              idx === tramosDescanso.length - 1 && !t.fin
+                ? { ...t, fin: horaActualStr }
+                : t
+            )
+          : [
+              {
+                inicio: horaInicioDescansoRegistrada || horaActualStr,
+                fin: horaActualStr,
+              },
+            ];
+
+      const minutosTotalesAcumulados =
+        calcularMinutosTramosCompletados(tramosActualizados);
+
+      const ubicacionFinEnriquecida = {
+        ...ubicacionJsonb,
+        tramos_descanso: tramosActualizados,
+        minutos_acumulados: minutosTotalesAcumulados,
+        ultimo_evento_descanso_ms: ahoraMs,
+      };
 
       const query = supabase.from("asistencias").update({
         hora_fin_descanso: horaActualStr,
-        ubicacion_fin_descanso: ubicacionJsonb as unknown as Json,
+        ubicacion_fin_descanso: ubicacionFinEnriquecida as unknown as Json,
       });
 
       const { error: updateError } = registroId
@@ -730,6 +966,8 @@ export default function ClockPanel({
 
       setTieneFinDescanso(true);
       setHoraFinDescansoRegistrada(horaActualStr);
+      setTramosDescanso(tramosActualizados);
+      setUltimoEventoDescansoMs(ahoraMs);
       setStatus("idle");
       onCheckIn?.(marcajePayload);
       router.refresh();
@@ -870,6 +1108,11 @@ export default function ClockPanel({
       return "MARCAR ENTRADA";
     }
     if (enDescanso) {
+      if (descansoBloqueadoPorCooldown) {
+        return `REGRESAR A ACTIVIDADES (ESPERA ${formatearCooldownMmSs(
+          segundosEsperaDescanso
+        )})`;
+      }
       return "REGRESAR A ACTIVIDADES";
     }
     if (salidaBloqueadaPorCooldown) {
@@ -883,6 +1126,9 @@ export default function ClockPanel({
 
   const botonAccionGeneralDeshabilitado =
     isLoading || isLocating || jornadaCompletada;
+
+  const botonDescansoDeshabilitado =
+    botonAccionGeneralDeshabilitado || descansoBloqueadoPorCooldown;
 
   return (
     <section className="flex flex-col gap-5 rounded-md border-t-4 border-status-success bg-brand-surface p-6 shadow-sm">
@@ -997,18 +1243,24 @@ export default function ClockPanel({
           </button>
         )}
 
-        {puedeIniciarDescanso && (
+        {(puedeIniciarDescanso || puedeContinuarDescanso) && (
           <>
             <button
               type="button"
               onClick={handleIniciarDescanso}
-              disabled={botonAccionGeneralDeshabilitado}
+              disabled={botonDescansoDeshabilitado}
               className="flex h-12 w-full items-center justify-center gap-2 rounded-md border-2 border-brand-gold bg-brand-beige/60 text-brand-dark shadow-sm transition-colors hover:bg-brand-beige disabled:cursor-not-allowed disabled:opacity-65"
             >
               <ClockIcon className="h-4 w-4 text-brand-gold" />
               <span className="text-xs font-bold uppercase tracking-widest">
                 {isLocating || status === "locating"
                   ? "OBTENIENDO TU UBICACIÓN..."
+                  : puedeContinuarDescanso
+                  ? descansoBloqueadoPorCooldown
+                    ? `CONTINUAR DESCANSO (ESPERA ${formatearCooldownMmSs(
+                        segundosEsperaDescanso
+                      )})`
+                    : `CONTINUAR DESCANSO (${minutosRestantesDescanso} MIN RESTANTES)`
                   : "INICIAR DESCANSO"}
               </span>
             </button>
@@ -1028,11 +1280,11 @@ export default function ClockPanel({
         )}
 
         {enDescanso && (
-          /* Durante el descanso: muestra "Regresar a Actividades" y oculta el cierre de turno */
+          /* Durante el descanso: muestra "Regresar a Actividades" (con cooldown de 5 min) y oculta el cierre de turno */
           <button
             type="button"
             onClick={handleFinalizarDescanso}
-            disabled={botonAccionGeneralDeshabilitado}
+            disabled={botonDescansoDeshabilitado}
             className={`flex h-14 w-full items-center justify-center gap-2.5 rounded-md text-white shadow-md transition-all disabled:cursor-not-allowed disabled:opacity-65 ${BUTTON_STYLES[status]}`}
           >
             <MapPinIcon className="h-5 w-5 text-brand-gold" />

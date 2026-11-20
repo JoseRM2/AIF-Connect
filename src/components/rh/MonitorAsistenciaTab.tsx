@@ -338,23 +338,36 @@ export default function MonitorAsistenciaTab() {
   const metricas = useMemo(() => {
     let aTiempo = 0;
     let retardos = 0;
+    const retardosPorColaborador = new Map<string, number>();
 
-    for (const a of asistencias) {
+    for (const a of asistenciasFiltradas) {
       const est = (a.estatus || "").toLowerCase();
       if (est.includes("retardo")) {
         retardos += 1;
+        const claveColab =
+          a.colaborador_id || obtenerNombreColaborador(a.colaboradores);
+        retardosPorColaborador.set(
+          claveColab,
+          (retardosPorColaborador.get(claveColab) ?? 0) + 1
+        );
       } else if (est.includes("tiempo") || est.includes("justificad")) {
         aTiempo += 1;
       }
     }
 
+    let faltasPorRetardos = 0;
+    for (const count of Array.from(retardosPorColaborador.values())) {
+      faltasPorRetardos += Math.floor(count / 3);
+    }
+
     return {
-      total: asistencias.length,
+      total: asistenciasFiltradas.length,
       aTiempo,
       retardos,
-      faltasPorRetardos: Math.floor(retardos / 3),
+      faltasPorRetardos,
+      retardosPorColaborador,
     };
-  }, [asistencias]);
+  }, [asistenciasFiltradas]);
 
   const handleAbrirModalAprobacion = (ticket: TicketAsistenciaRow) => {
     const sugeridas = extraerHorasDeMotivo(ticket.motivo_omision);
@@ -673,7 +686,7 @@ export default function MonitorAsistenciaTab() {
               {metricas.faltasPorRetardos}
             </p>
             <p className="mt-1.5 text-[9px] font-medium text-gray-400">
-              Regla 3 retardos = 1 falta
+              3 retardos por colaborador = 1 falta
             </p>
           </div>
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-status-danger/10 text-status-danger">
@@ -955,6 +968,12 @@ export default function MonitorAsistenciaTab() {
                     estatus: asistencia.estatus,
                   });
 
+                  const claveColab =
+                    asistencia.colaborador_id || nombreEmpleado;
+                  const retardosDelColab =
+                    metricas.retardosPorColaborador.get(claveColab) ?? 0;
+                  const faltasDelColab = Math.floor(retardosDelColab / 3);
+
                   return (
                     <tr
                       key={asistencia.id}
@@ -968,6 +987,13 @@ export default function MonitorAsistenciaTab() {
                         <p className="text-xs font-bold text-gray-900">
                           {nombreEmpleado}
                         </p>
+                        {faltasDelColab > 0 && (
+                          <span className="mt-1 inline-flex items-center gap-1 rounded-sm border border-status-danger/40 bg-status-danger/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-status-danger-dark">
+                            {faltasDelColab}{" "}
+                            {faltasDelColab === 1 ? "FALTA" : "FALTAS"} POR
+                            RETARDOS ({retardosDelColab} RET.)
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4 font-mono text-xs text-gray-700">
                         {asistencia.fecha}

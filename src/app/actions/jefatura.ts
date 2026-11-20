@@ -430,3 +430,160 @@ export async function resolverSolicitudEquipoAction(
     };
   }
 }
+
+export interface AsistenciaEquipoServerItem {
+  id: string;
+  colaborador_id: string;
+  nombre_colaborador: string;
+  puesto_colaborador: string;
+  fecha: string;
+  hora_entrada: string | null;
+  hora_inicio_descanso: string | null;
+  hora_fin_descanso: string | null;
+  hora_salida: string | null;
+  estatus: string | null;
+  ubicacion_entrada: unknown;
+  ubicacion_inicio_descanso: unknown;
+  ubicacion_fin_descanso: unknown;
+  ubicacion_salida: unknown;
+}
+
+export type ObtenerAsistenciasEquipoResult =
+  | {
+      ok: true;
+      asistencias: AsistenciaEquipoServerItem[];
+      totalEquipo: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+/**
+ * Obtiene los registros de asistencia EXCLUSIVAMENTE de los subordinados directos
+ * de la jefatura autenticada (sin incluir a otros equipos ni al resto de la plantilla).
+ */
+export async function obtenerAsistenciasEquipoAction(): Promise<ObtenerAsistenciasEquipoResult> {
+  try {
+    const sesion = createSessionClient();
+    const {
+      data: { user },
+      error: authError,
+    } = await sesion.auth.getUser();
+
+    if (authError || !user) {
+      return {
+        ok: false,
+        error: "Sesión no válida. Inicia sesión nuevamente.",
+      };
+    }
+
+    const supabaseAdmin = createAdminClient();
+    const userId = user.id;
+
+    const { data: todosColaboradores, error: colabError } = await supabaseAdmin
+      .from("colaboradores")
+      .select("id, nombre_completo, puesto, jefe_directo_id, jefe_directo")
+      .order("nombre_completo", { ascending: true });
+
+    if (colabError) {
+      return {
+        ok: false,
+        error: sanitizarErrorPublico(
+          colabError,
+          "No fue posible consultar tu equipo directo."
+        ),
+      };
+    }
+
+    const listaColabs = todosColaboradores ?? [];
+    const miPerfil = listaColabs.find((c) => c.id === userId);
+    const nombreJefeNorm = normalizarTextoComparacion(
+      miPerfil?.nombre_completo ?? ""
+    );
+
+    const subordinados = listaColabs.filter(
+      (c) =>
+        c.id !== userId &&
+        perteneceAlEquipoDelJefe(
+          c as unknown as Record<string, unknown>,
+          userId,
+          nombreJefeNorm
+        )
+    );
+
+    if (subordinados.length === 0) {
+      return {
+        ok: true,
+        asistencias: [],
+        totalEquipo: 0,
+      };
+    }
+
+    const mapaSubordinados = new Map(
+      subordinados.map((s) => [
+        s.id,
+        {
+          nombre: (s.nombre_completo ?? "Colaborador").trim() || "Colaborador",
+          puesto: (s.puesto ?? "Colaborador").trim() || "Colaborador",
+        },
+      ])
+    );
+
+    const idsEquipo = subordinados.map((s) => s.id);
+
+    const { data: filasAsistencia, error: errAsist } = await supabaseAdmin
+      .from("asistencias")
+      .select("*")
+      .in("colaborador_id", idsEquipo)
+      .order("fecha", { ascending: false })
+      .order("hora_entrada", { ascending: false })
+      .limit(100);
+
+    if (errAsist) {
+      return {
+        ok: false,
+        error: sanitizarErrorPublico(
+          errAsist,
+          "No fue posible consultar la asistencia de tu equipo."
+        ),
+      };
+    }
+
+    const asistencias: AsistenciaEquipoServerItem[] = (
+      filasAsistencia ?? []
+    ).map((a) => {
+      const info = mapaSubordinados.get(a.colaborador_id);
+      return {
+        id: a.id,
+        colaborador_id: a.colaborador_id,
+        nombre_colaborador: info?.nombre ?? "Colaborador",
+        puesto_colaborador: info?.puesto ?? "Colaborador",
+        fecha: a.fecha,
+        hora_entrada: a.hora_entrada ?? null,
+        hora_inicio_descanso: a.hora_inicio_descanso ?? null,
+        hora_fin_descanso: a.hora_fin_descanso ?? null,
+        hora_salida: a.hora_salida ?? null,
+        estatus: a.estatus ?? null,
+        ubicacion_entrada: a.ubicacion_entrada ?? null,
+        ubicacion_inicio_descanso: a.ubicacion_inicio_descanso ?? null,
+        ubicacion_fin_descanso: a.ubicacion_fin_descanso ?? null,
+        ubicacion_salida: a.ubicacion_salida ?? null,
+      };
+    });
+
+    return {
+      ok: true,
+      asistencias,
+      totalEquipo: subordinados.length,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: sanitizarErrorPublico(
+        err,
+        "Error inesperado al consultar la asistencia de tu equipo."
+      ),
+    };
+  }
+}
