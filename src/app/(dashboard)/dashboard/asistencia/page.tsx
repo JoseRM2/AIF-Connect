@@ -74,7 +74,7 @@ function normalizarUbicacion(valor: unknown): UbicacionMarcaje | null {
 }
 
 export default async function AsistenciaPage() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

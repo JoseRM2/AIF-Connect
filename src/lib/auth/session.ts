@@ -1,12 +1,5 @@
-import * as React from "react";
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
-
-const CLAVE_CACHE = "cache" as keyof typeof React;
-const fnCacheReact = React[CLAVE_CACHE] as unknown;
-const reactCache: <T extends (...args: never[]) => unknown>(fn: T) => T =
-  typeof fnCacheReact === "function"
-    ? (fnCacheReact as <T extends (...args: never[]) => unknown>(fn: T) => T)
-    : (fn) => fn;
 
 export type RolSistema = "Colaborador" | "Jefatura" | "Recursos Humanos";
 
@@ -78,9 +71,9 @@ export function esCuentaColaboradorActiva(
  * Envuelto en `React.cache` para deduplicar la consulta dentro del mismo
  * ciclo de renderizado entre Layouts y Server Components.
  */
-export const obtenerSesionYRol = reactCache(
+export const obtenerSesionYRol = cache(
   async (): Promise<PerfilSesionActual | null> => {
-    const supabase = createClient();
+    const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();

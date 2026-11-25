@@ -7,6 +7,10 @@ import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
 import { verificarOrigenPermitido } from "@/lib/security/rateLimit";
 import { sanitizarErrorPublico } from "@/lib/security/safeError";
 import {
+  cancelarSolicitudSchema,
+  validarConZod,
+} from "@/lib/security/schemas";
+import {
   anexarMotivoCancelacion,
   esSolicitudCancelada,
 } from "@/lib/solicitudes";
@@ -30,7 +34,7 @@ export async function cancelarSolicitudAction(
   motivoCancelacion: string
 ): Promise<CancelarSolicitudResult> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
@@ -42,19 +46,17 @@ export async function cancelarSolicitudAction(
       };
     }
 
-    const idLimpio = (solicitudId ?? "").trim();
-    if (!idLimpio) {
-      return { ok: false, error: "Identificador de solicitud no válido." };
+    const validacion = validarConZod(cancelarSolicitudSchema, {
+      solicitudId,
+      motivoCancelacion,
+    });
+    if (!validacion.ok) {
+      return { ok: false, error: validacion.error };
     }
-
-    const motivoCancelLimpio = (motivoCancelacion ?? "").trim();
-    if (motivoCancelLimpio.length < 3) {
-      return {
-        ok: false,
-        error:
-          "Ingresa el motivo de cancelación (mínimo 3 caracteres) para informar a tu Jefatura y a RH.",
-      };
-    }
+    const {
+      solicitudId: idLimpio,
+      motivoCancelacion: motivoCancelLimpio,
+    } = validacion.data;
 
     const db = createAdminClient();
 

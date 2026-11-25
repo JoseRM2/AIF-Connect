@@ -36,11 +36,11 @@ let cacheMemoriaCalendario: ConfigCalendarioRhStorage = {
   updatedAt: null,
 };
 
-function obtenerClienteDb() {
+async function obtenerClienteDb() {
   try {
     return createAdminClient();
   } catch {
-    return createSessionClient() as unknown as ReturnType<
+    return (await createSessionClient()) as unknown as ReturnType<
       typeof createAdminClient
     >;
   }
@@ -95,7 +95,7 @@ function extraerArrayStringsJson(raw: unknown): string[] {
 
 export async function leerConfigCalendarioRhInterno(): Promise<ConfigCalendarioRhStorage> {
   try {
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
 
     // 1. Intentar leer primero desde la tabla PostgreSQL `public.calendario_eventos_rh`
     const { data: filasTabla, error: errTabla } = await db
@@ -221,7 +221,7 @@ async function guardarConfigCalendarioRhInterno(
 ): Promise<void> {
   cacheMemoriaCalendario = nuevaConfig;
   try {
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const contenido = JSON.stringify(nuevaConfig, null, 2);
     const blob = new Blob([contenido], { type: "application/json" });
     await db.storage
@@ -347,7 +347,7 @@ async function procesarPublicacionesAutomaticasHoy(
   const registroEmitidas = {
     ...configActual.publicacionesAutomaticasEmitidas,
   };
-  const db = obtenerClienteDb();
+  const db = await obtenerClienteDb();
 
   // Precalcular qué colaboradores son Jefatura (por rol, bandera o por tener subordinados directos)
   // y localizar un perfil de Recursos Humanos como respaldo en caso de que `autor_id` no acepte NULL.
@@ -636,7 +636,7 @@ export async function ejecutarPublicacionesCelebracionesHoyCron(): Promise<{
   error?: string;
 }> {
   try {
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const [configRhInicial, { data: todosColaboradores, error: errColabs }] =
       await Promise.all([
         leerConfigCalendarioRhInterno(),
@@ -733,7 +733,7 @@ export async function obtenerDatosCalendarioAction(
       };
     }
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
 
     const [
       configRhInicial,
@@ -1099,7 +1099,7 @@ export async function obtenerCelebracionesPrivadasHoyAction(): Promise<
     const sesion = await obtenerSesionYRol();
     if (!sesion) return [];
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const [ { data: colab }, configRh ] = await Promise.all([
       db
         .from("colaboradores")
@@ -1277,7 +1277,7 @@ export async function agregarFeriadoDinamicoAction(payload: {
       };
     }
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const autorNombre = sesion.nombreCompleto || sesion.email || "RH";
 
     // 1. Insertar en la tabla `public.calendario_eventos_rh`
@@ -1350,7 +1350,7 @@ export async function eliminarFeriadoDinamicoAction(
       };
     }
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     await db.from("calendario_eventos_rh").delete().eq("id", idFeriado);
 
     const actual = await leerConfigCalendarioRhInterno();
@@ -1390,7 +1390,7 @@ export async function guardarConfigCelebracionesRhAction(
       };
     }
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const autorNombre = sesion.nombreCompleto || sesion.email || "RH";
 
     // Sincronizar con `public.calendario_eventos_rh`
@@ -1477,7 +1477,7 @@ export async function programarPublicacionConmemorativaAction(payload: {
       };
     }
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const fechaPublicacionIso = new Date(`${fechaLimpia}T08:00:00`).toISOString();
     const imagenSerializada = serializarUrlsImagenes(payload.imagenesUrls);
 
@@ -1581,7 +1581,7 @@ export async function eliminarFechaConmemorativaAction(
       };
     }
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const actual = await leerConfigCalendarioRhInterno();
     const encontrado = actual.fechasConmemorativas.find(
       (c) => c.id === idConmemorativo

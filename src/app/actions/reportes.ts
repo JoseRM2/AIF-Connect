@@ -34,7 +34,7 @@ export async function obtenerReporteVacacionesAction(filtros?: {
   fechaFin?: string;
 }): Promise<ObtenerReporteVacacionesResult> {
   try {
-    const sesion = createSessionClient();
+    const sesion = await createSessionClient();
     const {
       data: { user },
       error: authError,

@@ -113,7 +113,7 @@ function perteneceAlEquipoDelJefe(
  */
 export async function obtenerNotificacionesPendientesAction(): Promise<ObtenerNotificacionesResult> {
   try {
-    const sesion = createSessionClient();
+    const sesion = await createSessionClient();
     const {
       data: { user },
     } = await sesion.auth.getUser();

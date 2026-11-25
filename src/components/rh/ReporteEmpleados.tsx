@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
 import { obtenerReporteVacacionesAction } from "@/app/actions/reportes";
 import VisorDocumentoExpedienteModal from "@/components/rh/VisorDocumentoExpedienteModal";
 import { AlertTriangleIcon, DownloadIcon } from "@/components/ui/icons";
@@ -837,86 +836,75 @@ export default function ReporteEmpleados({
         return;
       }
 
-      // Construcción del libro de Excel (.xlsx) con SheetJS
-      const worksheet = XLSX.utils.json_to_sheet(filasExcel);
-
-      // Ajuste automático de ancho de columnas para lectura ejecutiva en nómina/auditoría
-      const encabezados = Object.keys(filasExcel[0] ?? {});
-      worksheet["!cols"] = encabezados.map((key) => {
-        const maxLen = filasExcel.reduce((acc, row) => {
-          const val = String(row[key] ?? "");
-          return Math.max(acc, val.length);
-        }, key.length);
-        return { wch: Math.min(Math.max(maxLen + 4, 14), 48) };
-      });
-
-      // Banderas visuales en Excel para Reporte de Asistencia (Misión 3: solo visual, sin deducciones/bonos)
-      if (tipoReporte === "Asistencia") {
-        filasExcel.forEach((fila, rowIdx) => {
-          const excelRow = rowIdx + 1; // +1 por fila de encabezados (0-indexed en encode_cell)
-          const duracionDesc = String(fila["Duración Descanso"] ?? "");
-          const indicadoresTexto = String(fila["Indicadores de Horario"] ?? "");
-          const tieneDescansoExcedido =
-            duracionDesc.includes("DESCANSO EXCEDIDO") ||
-            indicadoresTexto.includes("Descanso Excedido");
-          const tieneRetardo = indicadoresTexto.includes("Retardo");
-          const tieneTiempoAdicional =
-            indicadoresTexto.includes("Tiempo Adicional");
-
-          encabezados.forEach((colKey, colIdx) => {
-            const cellRef = XLSX.utils.encode_cell({ r: excelRow, c: colIdx });
-            const cell = worksheet[cellRef] as
-              | (XLSX.CellObject & { s?: Record<string, unknown> })
-              | undefined;
-            if (!cell) return;
-
-            if (
-              tieneDescansoExcedido &&
-              (colKey === "Duración Descanso" ||
-                colKey === "Indicadores de Horario")
-            ) {
-              cell.s = {
-                fill: { patternType: "solid", fgColor: { rgb: "FEE2E2" } },
-                font: { bold: true, color: { rgb: "991B1B" } },
-              };
-            } else if (tieneDescansoExcedido) {
-              cell.s = {
-                fill: { patternType: "solid", fgColor: { rgb: "FEF2F2" } },
-              };
-            } else if (
-              tieneRetardo &&
-              (colKey === "Hora de Entrada" ||
-                colKey === "Estatus de Asistencia" ||
-                colKey === "Indicadores de Horario")
-            ) {
-              cell.s = {
-                fill: { patternType: "solid", fgColor: { rgb: "FEF3C7" } },
-                font: { bold: true, color: { rgb: "92400E" } },
-              };
-            } else if (
-              tieneTiempoAdicional &&
-              (colKey === "Hora de Salida" ||
-                colKey === "Indicadores de Horario")
-            ) {
-              cell.s = {
-                fill: { patternType: "solid", fgColor: { rgb: "FDF8EE" } },
-                font: { bold: true, color: { rgb: "854D0E" } },
-              };
-            }
-          });
-        });
-      }
-
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, tipoReporte);
-
       const nombreArchivo = construirNombreArchivo(
         tipoReporte,
         empresa,
         requiereRangoFechas ? fechaInicio : undefined
       );
 
-      XLSX.writeFile(workbook, nombreArchivo);
+      const { exportarFilasAExcel } = await import("@/lib/excel");
+
+      await exportarFilasAExcel({
+        filas: filasExcel,
+        nombreHoja: tipoReporte,
+        nombreArchivo,
+        obtenerEstiloCelda:
+          tipoReporte === "Asistencia"
+            ? ({ fila, columna: colKey }) => {
+                const duracionDesc = String(fila["Duración Descanso"] ?? "");
+                const indicadoresTexto = String(
+                  fila["Indicadores de Horario"] ?? ""
+                );
+                const tieneDescansoExcedido =
+                  duracionDesc.includes("DESCANSO EXCEDIDO") ||
+                  indicadoresTexto.includes("Descanso Excedido");
+                const tieneRetardo = indicadoresTexto.includes("Retardo");
+                const tieneTiempoAdicional =
+                  indicadoresTexto.includes("Tiempo Adicional");
+
+                if (
+                  tieneDescansoExcedido &&
+                  (colKey === "Duración Descanso" ||
+                    colKey === "Indicadores de Horario")
+                ) {
+                  return {
+                    backgroundColor: "#FEE2E2",
+                    textColor: "#991B1B",
+                    fontWeight: "bold",
+                  };
+                }
+                if (tieneDescansoExcedido) {
+                  return {
+                    backgroundColor: "#FEF2F2",
+                  };
+                }
+                if (
+                  tieneRetardo &&
+                  (colKey === "Hora de Entrada" ||
+                    colKey === "Estatus de Asistencia" ||
+                    colKey === "Indicadores de Horario")
+                ) {
+                  return {
+                    backgroundColor: "#FEF3C7",
+                    textColor: "#92400E",
+                    fontWeight: "bold",
+                  };
+                }
+                if (
+                  tieneTiempoAdicional &&
+                  (colKey === "Hora de Salida" ||
+                    colKey === "Indicadores de Horario")
+                ) {
+                  return {
+                    backgroundColor: "#FDF8EE",
+                    textColor: "#854D0E",
+                    fontWeight: "bold",
+                  };
+                }
+                return undefined;
+              }
+            : undefined,
+      });
 
       setFeedbackReporte({
         tipo: "exito",

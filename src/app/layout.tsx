@@ -6,21 +6,21 @@ import "./globals.css";
 // Sans-serif geométrica: cuerpo, tablas, formularios, botones y navegación
 const fontSans = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  variable: "--font-sans",
+  variable: "--font-jakarta",
   display: "swap",
 });
 
 // Serif editorial: logotipo, títulos, KPIs y titulares
 const fontSerif = Playfair_Display({
   subsets: ["latin"],
-  variable: "--font-serif",
+  variable: "--font-playfair",
   display: "swap",
 });
 
 // Monoespaciada: coordenadas y códigos de ticket
 const fontMono = localFont({
   src: "./fonts/GeistMonoVF.woff",
-  variable: "--font-mono",
+  variable: "--font-geist-mono",
   weight: "100 900",
 });
 
@@ -35,12 +35,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="es">
-      <body
-        className={`${fontSans.variable} ${fontSerif.variable} ${fontMono.variable} bg-brand-beige font-sans antialiased`}
-      >
-        {children}
-      </body>
+    <html
+      lang="es"
+      className={`${fontSans.variable} ${fontSerif.variable} ${fontMono.variable}`}
+    >
+      <body className="bg-brand-beige font-sans antialiased">{children}</body>
     </html>
   );
 }

@@ -12,7 +12,7 @@ const PROTECTED_PREFIXES = ["/dashboard", "/rh", "/zonas", "/muro"];
 const RH_ONLY_PREFIXES = ["/dashboard/rh", "/dashboard/zonas", "/rh", "/zonas"];
 const ADMIN_ONLY_PREFIXES = ["/dashboard/admin"];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   });

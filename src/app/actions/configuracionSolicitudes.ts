@@ -29,11 +29,11 @@ let cacheMemoriaConfig: ConfigVacacionesNomina = {
   updatedAt: null,
 };
 
-function obtenerClienteStorage() {
+async function obtenerClienteStorage() {
   try {
     return createAdminClient();
   } catch {
-    return createSessionClient() as unknown as ReturnType<
+    return (await createSessionClient()) as unknown as ReturnType<
       typeof createAdminClient
     >;
   }
@@ -45,7 +45,7 @@ function obtenerClienteStorage() {
  */
 export async function obtenerConfigVacacionesNominaAction(): Promise<ConfigVacacionesNomina> {
   try {
-    const db = obtenerClienteStorage();
+    const db = await obtenerClienteStorage();
     const { data, error } = await db.storage
       .from(BUCKET_EXPEDIENTES)
       .download(RUTA_CONFIG_STORAGE);
@@ -82,7 +82,7 @@ export async function actualizarConfigVacacionesNominaAction(
   excepcionActiva: boolean
 ): Promise<ActualizarConfigVacacionesResult> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return {
         ok: false,
         config: cacheMemoriaConfig,
@@ -109,7 +109,7 @@ export async function actualizarConfigVacacionesNominaAction(
     cacheMemoriaConfig = nuevaConfig;
 
     try {
-      const db = obtenerClienteStorage();
+      const db = await obtenerClienteStorage();
       const contenido = JSON.stringify(nuevaConfig, null, 2);
       const blob = new Blob([contenido], { type: "application/json" });
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { obtenerSesionYRol } from "@/lib/auth/session";
 
@@ -15,5 +15,5 @@ export default async function RhProtectedLayout({
     redirect("/dashboard");
   }
 
-  return <>{children}</>;
+  return <Suspense fallback={null}>{children}</Suspense>;
 }

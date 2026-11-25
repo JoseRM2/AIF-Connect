@@ -427,20 +427,8 @@ export default function AdminWorkspace({
     setNombreArchivoExcel(file.name);
 
     try {
-      const XLSX = await import("xlsx");
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-      const sheetName = workbook.SheetNames[0];
-      if (!sheetName) {
-        setMensajeError("El archivo Excel no contiene hojas válidas.");
-        return;
-      }
-
-      const sheet = workbook.Sheets[sheetName]!;
-      const filasJson = XLSX.utils.sheet_to_json<Record<string, unknown>>(
-        sheet,
-        { defval: "" }
-      );
+      const { leerHojaCalculoComoJson } = await import("@/lib/excel");
+      const filasJson = await leerHojaCalculoComoJson(file);
 
       if (filasJson.length === 0) {
         setMensajeError("La hoja de Excel está vacía.");
@@ -727,9 +715,11 @@ export default function AdminWorkspace({
       setMensajeExito(
         `Archivo "${file.name}" leído correctamente: ${parseadas.length} colaboradores detectados listos para revisar e importar.`
       );
-    } catch {
+    } catch (err) {
       setMensajeError(
-        "No fue posible procesar el archivo Excel. Verifica que sea un archivo .xlsx o .xls válido."
+        err instanceof Error && err.message
+          ? err.message
+          : "No fue posible procesar el archivo Excel. Verifica que sea un archivo .xlsx o .csv válido."
       );
     } finally {
       setProcesandoExcel(false);
@@ -803,35 +793,34 @@ export default function AdminWorkspace({
       return;
     }
 
-    const XLSX = await import("xlsx");
-    const filasExportar = resultadoImportacion.resultados.map((r) => ({
-      "#": r.filaIndice,
-      "Nombre Completo": r.nombreCompleto,
-      "Correo Corporativo (Usuario)": r.correoCorporativo,
-      "Contraseña Generada": !r.ok
-        ? "— (No se creó por error)"
-        : r.contrasenaGenerada ??
-          "(Cuenta previa en Auth - conserva su contraseña)",
-      "Empresa": r.empresa,
-      "Rol Sistema": r.rolSistema,
-      "Departamento": r.departamento,
-      "Puesto": r.puesto,
-      "Resultado": r.ok
-        ? r.modo === "creado"
-          ? "CREADO NUEVO"
-          : "EXPEDIENTE ACTUALIZADO"
-        : `ERROR: ${r.error ?? ""}`,
-    }));
+    const { exportarFilasAExcel } = await import("@/lib/excel");
+    const filasExportar: Record<string, string | number>[] =
+      resultadoImportacion.resultados.map((r) => ({
+        "#": r.filaIndice,
+        "Nombre Completo": r.nombreCompleto,
+        "Correo Corporativo (Usuario)": r.correoCorporativo,
+        "Contraseña Generada": !r.ok
+          ? "— (No se creó por error)"
+          : r.contrasenaGenerada ??
+            "(Cuenta previa en Auth - conserva su contraseña)",
+        Empresa: r.empresa,
+        "Rol Sistema": r.rolSistema,
+        Departamento: r.departamento,
+        Puesto: r.puesto,
+        Resultado: r.ok
+          ? r.modo === "creado"
+            ? "CREADO NUEVO"
+            : "EXPEDIENTE ACTUALIZADO"
+          : `ERROR: ${r.error ?? ""}`,
+      }));
 
-    const ws = XLSX.utils.json_to_sheet(filasExportar);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Credenciales_Prueba");
-    XLSX.writeFile(
-      wb,
-      `Credenciales_Usuarios_AIF_Connect_${new Date()
+    await exportarFilasAExcel({
+      filas: filasExportar,
+      nombreHoja: "Credenciales_Prueba",
+      nombreArchivo: `Credenciales_Usuarios_AIF_Connect_${new Date()
         .toISOString()
-        .slice(0, 10)}.xlsx`
-    );
+        .slice(0, 10)}.xlsx`,
+    });
   };
 
   // KPIs para el Administrador del Sistema
@@ -1405,7 +1394,7 @@ export default function AdminWorkspace({
               <input
                 ref={excelInputRef}
                 type="file"
-                accept=".xlsx,.xls,.csv"
+                accept=".xlsx,.csv"
                 onChange={handleSeleccionarExcel}
                 className="hidden"
                 id="input-excel-admin"

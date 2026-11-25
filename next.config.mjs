@@ -4,7 +4,7 @@ const cspDirectives = [
   "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
-  "img-src 'self' data: blob: https://*.supabase.co https://*.tile.openstreetmap.org https://unpkg.com https:",
+  "img-src 'self' data: blob: https://*.supabase.co https://*.tile.openstreetmap.org https:",
   "media-src 'self' data: blob: https://*.supabase.co",
   "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://nominatim.openstreetmap.org https://*.tile.openstreetmap.org",
   "frame-src 'self' https://*.supabase.co blob: data:",

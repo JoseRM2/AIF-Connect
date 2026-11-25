@@ -9,6 +9,7 @@ import {
   verificarRateLimit,
 } from "@/lib/security/rateLimit";
 import { sanitizarErrorAuth } from "@/lib/security/safeError";
+import { loginSchema, validarConZod } from "@/lib/security/schemas";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -31,24 +32,25 @@ export async function iniciarSesionServerAction(
   password: string
 ): Promise<IniciarSesionResult> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return {
         ok: false,
         error: "Origen de solicitud no autorizado.",
       };
     }
 
-    const emailLimpio = (email ?? "").trim().toLowerCase();
-    if (!emailLimpio || !password || emailLimpio.length > 254 || password.length > 256) {
+    const validacion = validarConZod(loginSchema, { email, password });
+    if (!validacion.ok) {
       return {
         ok: false,
-        error: "Ingresa un correo electrónico y contraseña válidos.",
+        error: validacion.error,
       };
     }
+    const { email: emailLimpio, password: passwordValida } = validacion.data;
 
-    const ip = obtenerIpSolicitante();
+    const ip = await obtenerIpSolicitante();
     const claveRateLimit = `login:${ip}:${emailLimpio}`;
-    const controlTasa = verificarRateLimit(
+    const controlTasa = await verificarRateLimit(
       claveRateLimit,
       MAX_INTENTOS_LOGIN,
       VENTANA_LOGIN_MS
@@ -69,10 +71,10 @@ export async function iniciarSesionServerAction(
       };
     }
 
-    const supabase = createClient();
+    const supabase = await createClient();
     const { data, error } = await supabase.auth.signInWithPassword({
       email: emailLimpio,
-      password,
+      password: passwordValida,
     });
 
     if (error || !data.user) {
@@ -122,7 +124,7 @@ export async function iniciarSesionServerAction(
       // Si el cliente admin no está disponible en entorno local, middleware hará la segunda verificación
     }
 
-    reiniciarRateLimit(claveRateLimit);
+    await reiniciarRateLimit(claveRateLimit);
     void registrarEventoAuditoria({
       evento: "AUTH_LOGIN_EXITOSO",
       actorId: data.user.id,
@@ -140,7 +142,7 @@ export async function iniciarSesionServerAction(
 
 export async function cerrarSesionServerAction(): Promise<void> {
   try {
-    const supabase = createClient();
+    const supabase = await createClient();
     await supabase.auth.signOut();
   } catch {
     // Ignorar errores al limpiar cookies en servidor

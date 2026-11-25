@@ -57,7 +57,7 @@ const ACTIVITY_EVENTS: ReadonlyArray<keyof WindowEventMap> = [
 export function useAutoLogout(timeoutMs: number = INACTIVITY_TIMEOUT_MS): void {
   const router = useRouter();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastResetRef = useRef<number>(Date.now());
+  const lastResetRef = useRef<number>(0);
   const isSigningOutRef = useRef<boolean>(false);
 
   const cerrarSesionPorInactividad = useCallback(async () => {

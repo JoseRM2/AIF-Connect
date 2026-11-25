@@ -702,12 +702,44 @@ export interface Database {
           }
         ];
       };
+      seguridad_rate_limits: {
+        Row: {
+          clave: string;
+          conteo: number;
+          expira_en: string;
+          updated_at: string;
+        };
+        Insert: {
+          clave: string;
+          conteo?: number;
+          expira_en: string;
+          updated_at?: string;
+        };
+        Update: {
+          clave?: string;
+          conteo?: number;
+          expira_en?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: {
       [_ in never]: never;
     };
     Functions: {
-      [_ in never]: never;
+      verificar_rate_limit_atomico: {
+        Args: {
+          p_clave: string;
+          p_max_intentos: number;
+          p_ventana_ms: number;
+        };
+        Returns: {
+          permitido: boolean;
+          restantes: number;
+          reintentar_en_segundos: number;
+        }[];
+      };
     };
     Enums: {
       estatus_solicitud:

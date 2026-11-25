@@ -12,6 +12,10 @@ import {
   verificarRateLimit,
 } from "@/lib/security/rateLimit";
 import { sanitizarErrorPublico } from "@/lib/security/safeError";
+import {
+  crearColaboradorMinimoSchema,
+  validarConZod,
+} from "@/lib/security/schemas";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/supabase";
@@ -103,12 +107,12 @@ export async function crearColaboradorAction(
   payload: CrearColaboradorPayload
 ): Promise<CrearColaboradorResultado> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
     // 0. Autorización: el service role omite RLS, por lo que solo RH puede invocarlo.
-    const sesion = createSessionClient();
+    const sesion = await createSessionClient();
     const {
       data: { user: solicitante },
     } = await sesion.auth.getUser();
@@ -117,7 +121,7 @@ export async function crearColaboradorAction(
       return { ok: false, error: "Sesión no válida. Inicia sesión nuevamente." };
     }
 
-    const controlTasa = verificarRateLimit(
+    const controlTasa = await verificarRateLimit(
       `rh-alta:${solicitante.id}`,
       15,
       60 * 1000
@@ -147,17 +151,16 @@ export async function crearColaboradorAction(
       };
     }
 
-    // Validaciones mínimas del lado servidor
-    const correo = payload.correo_corporativo?.trim().toLowerCase();
-    if (!correo) {
-      return { ok: false, error: "El correo corporativo es obligatorio." };
+    // Validaciones declarativas del lado servidor con Zod
+    const validacion = validarConZod(crearColaboradorMinimoSchema, {
+      correo_corporativo: payload.correo_corporativo,
+      nombre_completo: payload.nombre_completo,
+      empresa: payload.empresa,
+    });
+    if (!validacion.ok) {
+      return { ok: false, error: validacion.error };
     }
-    if (!payload.nombre_completo?.trim()) {
-      return { ok: false, error: "El nombre completo es obligatorio." };
-    }
-    if (payload.empresa !== "AIF" && payload.empresa !== "ROYAL") {
-      return { ok: false, error: "La empresa debe ser AIF o ROYAL." };
-    }
+    const { correo_corporativo: correo } = validacion.data;
 
     // Paso 1: crear usuario en Auth con contraseña definitiva autogenerada
     // (no afecta la sesión actual de RH)
@@ -254,11 +257,11 @@ export async function sincronizarEstatusAccesoColaboradorAction(payload: {
   motivoBaja?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
-    const sesion = createSessionClient();
+    const sesion = await createSessionClient();
     const {
       data: { user: solicitante },
     } = await sesion.auth.getUser();
@@ -407,7 +410,7 @@ export async function importarColaboradoresMasivoAdminAction(
   filas: CrearColaboradorPayload[]
 ): Promise<ResultadoImportacionMasivaAdmin> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return {
         ok: false,
         errorGeneral: "Origen de solicitud no autorizado.",

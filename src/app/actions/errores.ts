@@ -6,6 +6,10 @@ import {
   verificarOrigenPermitido,
   verificarRateLimit,
 } from "@/lib/security/rateLimit";
+import {
+  crearReporteErrorSchema,
+  validarConZod,
+} from "@/lib/security/schemas";
 import { sanitizarErrorPublico } from "@/lib/security/safeError";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
@@ -21,13 +25,6 @@ export type EstatusReporteError =
   | "Resuelto"
   | "Descartado";
 
-const SEVERIDADES_VALIDAS: readonly SeveridadError[] = [
-  "Baja",
-  "Media",
-  "Alta",
-  "Critica",
-];
-
 const ESTATUS_VALIDOS: readonly EstatusReporteError[] = [
   "Abierto",
   "En_Revision",
@@ -35,11 +32,11 @@ const ESTATUS_VALIDOS: readonly EstatusReporteError[] = [
   "Descartado",
 ];
 
-function obtenerClienteDb() {
+async function obtenerClienteDb() {
   try {
     return createAdminClient();
   } catch {
-    return createSessionClient() as unknown as ReturnType<
+    return (await createSessionClient()) as unknown as ReturnType<
       typeof createAdminClient
     >;
   }
@@ -72,7 +69,7 @@ export async function obtenerReportesErroresAction(): Promise<DatosReportesError
       };
     }
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
 
     if (sesion.esAdminSistema) {
       const { data, error } = await db
@@ -159,7 +156,7 @@ export async function crearReporteErrorAction(
   payload: CrearReporteErrorPayload
 ): Promise<{ ok: boolean; error?: string; reporte?: ReporteErrorRow }> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
@@ -171,7 +168,7 @@ export async function crearReporteErrorAction(
       };
     }
 
-    const controlTasa = verificarRateLimit(
+    const controlTasa = await verificarRateLimit(
       `reporte-error:${sesion.userId}`,
       10,
       5 * 60 * 1000
@@ -184,49 +181,23 @@ export async function crearReporteErrorAction(
       };
     }
 
-    const tituloLimpio = (payload.titulo ?? "").trim();
-    const descripcionLimpia = (payload.descripcion ?? "").trim();
-    const moduloLimpio = (payload.modulo ?? "General").trim() || "General";
-    const categoriaLimpia =
-      (payload.categoria ?? "Funcionalidad").trim() || "Funcionalidad";
-    const severidadValida: SeveridadError = SEVERIDADES_VALIDAS.includes(
-      payload.severidad
-    )
-      ? payload.severidad
-      : "Media";
+    const validacion = validarConZod(crearReporteErrorSchema, payload);
+    if (!validacion.ok) {
+      return { ok: false, error: validacion.error };
+    }
+    const {
+      titulo: tituloLimpio,
+      descripcion: descripcionLimpia,
+      modulo: moduloLimpio,
+      categoria: categoriaLimpia,
+      severidad: severidadValida,
+      pasosReproducir: pasosLimpios,
+      rutaOrigen: rutaLimpia,
+      navegadorInfo: navLimpio,
+      capturaUrl: capturaLimpia,
+    } = validacion.data;
 
-    if (!tituloLimpio || tituloLimpio.length < 4) {
-      return {
-        ok: false,
-        error: "Ingresa un título breve descriptivo (mínimo 4 caracteres).",
-      };
-    }
-    if (tituloLimpio.length > 180) {
-      return {
-        ok: false,
-        error: "El título no puede exceder 180 caracteres.",
-      };
-    }
-    if (!descripcionLimpia || descripcionLimpia.length < 10) {
-      return {
-        ok: false,
-        error:
-          "Describe con detalle el error detectado (mínimo 10 caracteres).",
-      };
-    }
-    if (descripcionLimpia.length > 3000) {
-      return {
-        ok: false,
-        error: "La descripción no puede exceder 3,000 caracteres.",
-      };
-    }
-
-    const pasosLimpios = (payload.pasosReproducir ?? "").trim().slice(0, 2000) || null;
-    const rutaLimpia = (payload.rutaOrigen ?? "").trim().slice(0, 250) || null;
-    const navLimpio = (payload.navegadorInfo ?? "").trim().slice(0, 300) || null;
-    const capturaLimpia = (payload.capturaUrl ?? "").trim().slice(0, 1000) || null;
-
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const ahoraIso = new Date().toISOString();
 
     const { data, error } = await db
@@ -293,7 +264,7 @@ export async function actualizarEstatusReporteErrorAction(
   payload: ActualizarReporteErrorPayload
 ): Promise<{ ok: boolean; error?: string; reporte?: ReporteErrorRow }> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
@@ -322,7 +293,7 @@ export async function actualizarEstatusReporteErrorAction(
     const esFinalizado =
       estatusValido === "Resuelto" || estatusValido === "Descartado";
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const { data, error } = await db
       .from("reportes_errores")
       .update({
@@ -368,7 +339,7 @@ export async function eliminarReporteErrorAction(
   reporteId: string
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
@@ -386,7 +357,7 @@ export async function eliminarReporteErrorAction(
       return { ok: false, error: "Identificador de reporte inválido." };
     }
 
-    const db = obtenerClienteDb();
+    const db = await obtenerClienteDb();
     const { error } = await db
       .from("reportes_errores")
       .delete()

@@ -1,8 +1,54 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme inline {
+  /* Identidad institucional */
+  --color-brand-dark: #1a181c;
+  --color-brand-gold: #b19b77;
+  --color-brand-beige: #e4ded5;
+  --color-brand-surface: #ffffff;
+
+  /* Estados semánticos con contraste reforzado (>= 4.5:1 sobre fondos claros) */
+  --color-status-success: var(--color-emerald-700);
+  --color-status-success-dark: var(--color-emerald-800);
+  --color-status-danger: var(--color-rose-700);
+  --color-status-danger-dark: var(--color-rose-800);
+  --color-status-warning: var(--color-amber-700);
+  --color-status-warning-dark: var(--color-amber-900);
+  --color-status-info: var(--color-blue-700);
+  --color-status-info-dark: var(--color-blue-900);
+
+  /* Escala tipográfica calibrada (+1px) */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.4;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.45;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.5;
+
+  /* Familias tipográficas cargadas con next/font */
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-serif: var(--font-playfair), ui-serif, Georgia, Cambria,
+    "Times New Roman", Times, serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
 
 @layer base {
+  /* Compatibilidad de bordes por defecto al migrar de Tailwind v3 -> v4 */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
   html {
     font-size: 16px;
     color: #111827;
@@ -102,8 +148,8 @@ dialog::backdrop {
 
 /* Geocerca dibujada con Leaflet (color tomado del token de marca). */
 .zona-circulo {
-  stroke: theme("colors.brand-dark");
-  fill: theme("colors.brand-dark");
+  stroke: var(--color-brand-dark);
+  fill: var(--color-brand-dark);
   fill-opacity: 0.15;
   stroke-width: 2;
 }

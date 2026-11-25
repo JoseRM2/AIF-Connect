@@ -63,7 +63,7 @@ function normalizarEstatusSolicitud(
 }
 
 export default async function SolicitudesPage() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

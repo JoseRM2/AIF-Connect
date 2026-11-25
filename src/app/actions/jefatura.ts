@@ -87,7 +87,7 @@ function perteneceAlEquipoDelJefe(
  */
 export async function obtenerSolicitudesEquipoAction(): Promise<ObtenerSolicitudesEquipoResult> {
   try {
-    const sesion = createSessionClient();
+    const sesion = await createSessionClient();
     const {
       data: { user },
       error: authError,
@@ -227,14 +227,14 @@ export async function resolverSolicitudEquipoAction(
   decision: "Aprobado" | "Rechazado"
 ): Promise<ResolverSolicitudEquipoResult> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return {
         ok: false,
         error: "Origen de solicitud no autorizado.",
       };
     }
 
-    const sesion = createSessionClient();
+    const sesion = await createSessionClient();
     const {
       data: { user },
       error: authError,
@@ -465,7 +465,7 @@ export type ObtenerAsistenciasEquipoResult =
  */
 export async function obtenerAsistenciasEquipoAction(): Promise<ObtenerAsistenciasEquipoResult> {
   try {
-    const sesion = createSessionClient();
+    const sesion = await createSessionClient();
     const {
       data: { user },
       error: authError,

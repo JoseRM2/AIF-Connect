@@ -43,7 +43,7 @@ function formatearHoraMexico(fecha: Date): string {
 export async function registrarEventoAuditoria(
   payload: EventoAuditoriaPayload
 ): Promise<void> {
-  const ip = obtenerIpSolicitante();
+  const ip = await obtenerIpSolicitante();
   const ahora = new Date();
   const timestamp = ahora.toISOString();
   const horaMexico = formatearHoraMexico(ahora);

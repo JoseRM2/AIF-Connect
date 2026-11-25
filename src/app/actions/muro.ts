@@ -12,6 +12,7 @@ import {
   verificarOrigenPermitido,
   verificarRateLimit,
 } from "@/lib/security/rateLimit";
+import { comentarioMuroSchema, validarConZod } from "@/lib/security/schemas";
 import { sanitizarErrorPublico } from "@/lib/security/safeError";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
@@ -233,22 +234,17 @@ export async function enviarComentarioMuroAction(payload: {
   contenido: string;
 }): Promise<EnviarComentarioMuroResult> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
-    const limpio = (payload.contenido ?? "").trim();
-    if (!limpio) {
-      return { ok: false, error: "El comentario no puede estar vacío." };
+    const validacion = validarConZod(comentarioMuroSchema, payload);
+    if (!validacion.ok) {
+      return { ok: false, error: validacion.error };
     }
-    if (limpio.length > 1000) {
-      return {
-        ok: false,
-        error: "El comentario excede la longitud máxima permitida (1,000 caracteres).",
-      };
-    }
+    const { publicacionId, contenido: limpio } = validacion.data;
 
-    const sesion = createSessionClient();
+    const sesion = await createSessionClient();
     const {
       data: { user },
       error: authError,
@@ -261,7 +257,7 @@ export async function enviarComentarioMuroAction(payload: {
       };
     }
 
-    const controlTasa = verificarRateLimit(
+    const controlTasa = await verificarRateLimit(
       `muro-comentario:${user.id}`,
       6,
       60 * 1000
@@ -275,7 +271,6 @@ export async function enviarComentarioMuroAction(payload: {
 
     const supabaseAdmin = createAdminClient();
     const colaboradorId = user.id;
-    const publicacionId = payload.publicacionId;
 
     // 1. Intentar INSERT directo (funciona al primer comentario o si se eliminó el unique constraint en BD)
     const { data: insertado, error: insertError } = await supabaseAdmin
@@ -404,7 +399,7 @@ export async function actualizarPublicacionMuroAction(
   publicacion?: Record<string, unknown>;
 }> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
@@ -480,7 +475,7 @@ export async function eliminarPublicacionMuroAction(
   publicacionId: string
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    if (!verificarOrigenPermitido()) {
+    if (!(await verificarOrigenPermitido())) {
       return { ok: false, error: "Origen de solicitud no autorizado." };
     }
 
