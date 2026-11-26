@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { depurarPublicacionesEliminacionVencida } from "@/app/actions/muro";
 import { obtenerSesionYRol, type RolSistema } from "@/lib/auth/session";
 import {
   CONFIG_CELEBRACIONES_DEFAULT,
@@ -667,6 +668,8 @@ export async function ejecutarPublicacionesCelebracionesHoyCron(): Promise<{
       configRhInicial,
       null
     );
+
+    await depurarPublicacionesEliminacionVencida();
 
     return {
       ok: true,

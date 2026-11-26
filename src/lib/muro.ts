@@ -175,6 +175,38 @@ export function formatearContenidoConEnlaces(texto: string): string {
 
 export const PREFIJO_AUDIENCIA_JEFATURA = "JEFATURA:";
 export const PREFIJO_AUDIENCIA_CELEBRACION_AREA = "CELEBRACION_AREA:";
+export const PREFIJO_ELIMINACION_PROGRAMADA = "ELIMINAR_EN:";
+
+/**
+ * Extrae la fecha/hora ISO programada de eliminación desde `muro_publicaciones.categoria`
+ * cuando contiene la marca `ELIMINAR_EN:<ISO_TIMESTAMP>`.
+ */
+export function extraerFechaEliminacionProgramada(
+  categoria?: string | null
+): string | null {
+  const raw = (categoria ?? "").trim();
+  if (!raw.toUpperCase().startsWith(PREFIJO_ELIMINACION_PROGRAMADA)) {
+    return null;
+  }
+  const iso = raw.slice(PREFIJO_ELIMINACION_PROGRAMADA.length).trim();
+  if (!iso) return null;
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+export function construirMarcaEliminacionProgramada(fechaIso: string): string {
+  return `${PREFIJO_ELIMINACION_PROGRAMADA}${new Date(fechaIso).toISOString()}`;
+}
+
+export function estaVencidaParaEliminacion(
+  categoria?: string | null,
+  ahoraMs = Date.now()
+): boolean {
+  const iso = extraerFechaEliminacionProgramada(categoria);
+  if (!iso) return false;
+  return new Date(iso).getTime() <= ahoraMs;
+}
 
 export function extraerJefeFestejadoId(
   departamentoDestino?: string | null

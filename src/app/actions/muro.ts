@@ -3,10 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { obtenerSesionYRol } from "@/lib/auth/session";
 import {
+  construirMarcaEliminacionProgramada,
   cumpleFiltroAudiencia,
   esAudienciaCelebracion,
+  estaVencidaParaEliminacion,
   extraerCelebracionArea,
   extraerJefeFestejadoId,
+  PREFIJO_ELIMINACION_PROGRAMADA,
 } from "@/lib/muro";
 import {
   verificarOrigenPermitido,
@@ -33,6 +36,48 @@ export interface DatosMuroResponse {
  * y moderación de comentarios) y exponiendo únicamente `nombre_completo` de los autores
  * sin abrir acceso de lectura directo sobre `public.colaboradores` en el navegador.
  */
+/**
+ * Elimina automáticamente de `muro_publicaciones` (y sus interacciones vinculadas)
+ * cualquier comunicado cuya fecha/hora programada de eliminación (`categoria = ELIMINAR_EN:<ISO>`)
+ * ya se haya cumplido.
+ */
+export async function depurarPublicacionesEliminacionVencida(): Promise<number> {
+  try {
+    const db = createAdminClient();
+    const { data: programadas, error } = await db
+      .from("muro_publicaciones")
+      .select("id, categoria")
+      .like("categoria", `${PREFIJO_ELIMINACION_PROGRAMADA}%`);
+
+    if (error || !programadas || programadas.length === 0) {
+      return 0;
+    }
+
+    const ahoraMs = Date.now();
+    const idsVencidos = programadas
+      .filter((p) => estaVencidaParaEliminacion(p.categoria, ahoraMs))
+      .map((p) => p.id);
+
+    if (idsVencidos.length === 0) return 0;
+
+    await db
+      .from("muro_interacciones")
+      .delete()
+      .in("publicacion_id", idsVencidos);
+
+    const { error: errDel } = await db
+      .from("muro_publicaciones")
+      .delete()
+      .in("id", idsVencidos);
+
+    if (errDel) return 0;
+
+    return idsVencidos.length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function obtenerDatosMuroAction(): Promise<DatosMuroResponse> {
   try {
     const sesion = await obtenerSesionYRol();
@@ -46,6 +91,8 @@ export async function obtenerDatosMuroAction(): Promise<DatosMuroResponse> {
         interacciones: [],
       };
     }
+
+    await depurarPublicacionesEliminacionVencida();
 
     const db = createAdminClient();
     const esRH = sesion.esRecursosHumanos;
@@ -526,6 +573,91 @@ export async function eliminarPublicacionMuroAction(
       error: sanitizarErrorPublico(
         err,
         "Ocurrió un error al eliminar el comunicado."
+      ),
+    };
+  }
+}
+
+/**
+ * Programa (o cancela si `fechaEliminacionIso` es `null`) la fecha y hora de eliminación
+ * automática de un comunicado en `muro_publicaciones`.
+ * Exclusivo para Recursos Humanos (o Administrador del Sistema).
+ */
+export async function programarEliminacionPublicacionMuroAction(
+  publicacionId: string,
+  fechaEliminacionIso: string | null
+): Promise<{
+  ok: boolean;
+  categoria?: string | null;
+  error?: string;
+}> {
+  try {
+    if (!(await verificarOrigenPermitido())) {
+      return { ok: false, error: "Origen de solicitud no autorizado." };
+    }
+
+    const sesion = await obtenerSesionYRol();
+    if (!sesion || (!sesion.esRecursosHumanos && !sesion.esAdminSistema)) {
+      return {
+        ok: false,
+        error:
+          "Solo Recursos Humanos puede programar la eliminación de comunicados.",
+      };
+    }
+
+    const idLimpio = (publicacionId ?? "").trim();
+    if (!idLimpio) {
+      return { ok: false, error: "Identificador de comunicado inválido." };
+    }
+
+    let categoriaNueva: string | null = null;
+    if (fechaEliminacionIso) {
+      const fechaObj = new Date(fechaEliminacionIso);
+      if (Number.isNaN(fechaObj.getTime())) {
+        return {
+          ok: false,
+          error: "La fecha y hora programada de eliminación no es válida.",
+        };
+      }
+      if (fechaObj.getTime() <= Date.now()) {
+        return {
+          ok: false,
+          error:
+            "La fecha y hora de eliminación debe ser posterior al momento actual.",
+        };
+      }
+      categoriaNueva = construirMarcaEliminacionProgramada(
+        fechaObj.toISOString()
+      );
+    }
+
+    const db = createAdminClient();
+    const { error } = await db
+      .from("muro_publicaciones")
+      .update({ categoria: categoriaNueva })
+      .eq("id", idLimpio);
+
+    if (error) {
+      return {
+        ok: false,
+        error: sanitizarErrorPublico(
+          error,
+          "No se pudo programar la eliminación del comunicado."
+        ),
+      };
+    }
+
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/muro");
+    revalidatePath("/dashboard/rh");
+
+    return { ok: true, categoria: categoriaNueva };
+  } catch (err) {
+    return {
+      ok: false,
+      error: sanitizarErrorPublico(
+        err,
+        "Ocurrió un error al programar la eliminación del comunicado."
       ),
     };
   }

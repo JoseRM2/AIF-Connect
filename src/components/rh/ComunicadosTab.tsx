@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import {
   actualizarPublicacionMuroAction,
+  depurarPublicacionesEliminacionVencida,
   eliminarPublicacionMuroAction,
+  programarEliminacionPublicacionMuroAction,
 } from "@/app/actions/muro";
 import {
   AlertTriangleIcon,
@@ -13,6 +15,7 @@ import {
   TrashIcon,
 } from "@/components/ui/icons";
 import {
+  extraerFechaEliminacionProgramada,
   extraerUrlsImagenes,
   formatearAlcancePublicacion,
   serializarUrlsImagenes,
@@ -46,6 +49,7 @@ export interface PublicacionMuroRow {
   fecha_publicacion?: string | null;
   empresa_destino?: string | null;
   departamento_destino?: string | null;
+  categoria?: string | null;
   created_at?: string | null;
 }
 
@@ -158,6 +162,14 @@ export default function ComunicadosTab() {
   );
   const [publicacionAEliminar, setPublicacionAEliminar] =
     useState<PublicacionMuroRow | null>(null);
+  const [modoEliminacion, setModoEliminacion] = useState<"ahora" | "programar">(
+    "ahora"
+  );
+  const [fechaEliminacionProgramada, setFechaEliminacionProgramada] =
+    useState<string>("");
+  const [errorEliminacionModal, setErrorEliminacionModal] = useState<
+    string | null
+  >(null);
   const [eliminandoId, setEliminandoId] = useState<string | null>(null);
   const formularioRef = useRef<HTMLElement | null>(null);
 
@@ -175,6 +187,7 @@ export default function ComunicadosTab() {
     setFetchError(null);
 
     try {
+      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
 
       const primeraConsulta = await supabase
@@ -230,6 +243,7 @@ export default function ComunicadosTab() {
   const fetchComentariosPendientes = useCallback(async () => {
     setIsLoadingComentarios(true);
     try {
+      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
 
       const { data, error } = await supabase
@@ -435,16 +449,102 @@ export default function ComunicadosTab() {
     formularioRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const formatearParaDatetimeLocal = (fecha: Date): string => {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${fecha.getFullYear()}-${pad(fecha.getMonth() + 1)}-${pad(
+      fecha.getDate()
+    )}T${pad(fecha.getHours())}:${pad(fecha.getMinutes())}`;
+  };
+
+  const formatearFechaHoraCorta = (iso: string): string => {
+    const fecha = new Date(iso);
+    if (Number.isNaN(fecha.getTime())) return iso;
+    return fecha.toLocaleString("es-MX", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  };
+
+  const handleAbrirModalEliminar = (pub: PublicacionMuroRow) => {
+    setErrorEliminacionModal(null);
+    const fechaExistente = extraerFechaEliminacionProgramada(pub.categoria);
+    if (fechaExistente) {
+      setModoEliminacion("programar");
+      setFechaEliminacionProgramada(
+        formatearParaDatetimeLocal(new Date(fechaExistente))
+      );
+    } else {
+      setModoEliminacion("ahora");
+      const manana = new Date();
+      manana.setDate(manana.getDate() + 1);
+      manana.setHours(18, 0, 0, 0);
+      setFechaEliminacionProgramada(formatearParaDatetimeLocal(manana));
+    }
+    setPublicacionAEliminar(pub);
+  };
+
   const handleConfirmarEliminarPublicacion = async () => {
     if (!publicacionAEliminar || eliminandoId) return;
     const idTarget = publicacionAEliminar.id;
+    setErrorEliminacionModal(null);
+
+    if (modoEliminacion === "programar") {
+      if (!fechaEliminacionProgramada) {
+        setErrorEliminacionModal(
+          "Selecciona la fecha y hora para programar la eliminación."
+        );
+        return;
+      }
+      const fechaObj = new Date(fechaEliminacionProgramada);
+      if (Number.isNaN(fechaObj.getTime()) || fechaObj.getTime() <= Date.now()) {
+        setErrorEliminacionModal(
+          "La fecha y hora de eliminación debe ser posterior al momento actual."
+        );
+        return;
+      }
+
+      setEliminandoId(idTarget);
+      try {
+        const res = await programarEliminacionPublicacionMuroAction(
+          idTarget,
+          fechaObj.toISOString()
+        );
+        if (!res.ok) {
+          setErrorEliminacionModal(
+            res.error || "No se pudo programar la eliminación."
+          );
+          return;
+        }
+        setPublicaciones((prev) =>
+          prev.map((p) =>
+            p.id === idTarget ? { ...p, categoria: res.categoria ?? null } : p
+          )
+        );
+        setMensajeExito(
+          `Eliminación programada para el ${formatearFechaHoraCorta(
+            fechaObj.toISOString()
+          )}.`
+        );
+        setPublicacionAEliminar(null);
+      } finally {
+        setEliminandoId(null);
+      }
+      return;
+    }
+
     setEliminandoId(idTarget);
     setMensajeError(null);
 
     try {
       const res = await eliminarPublicacionMuroAction(idTarget);
       if (!res.ok) {
-        setMensajeError(res.error || "No se pudo eliminar la publicación.");
+        setErrorEliminacionModal(
+          res.error || "No se pudo eliminar la publicación."
+        );
         return;
       }
 
@@ -452,6 +552,32 @@ export default function ComunicadosTab() {
       if (publicacionEditando?.id === idTarget) {
         handleCancelarEdicion();
       }
+      setPublicacionAEliminar(null);
+    } finally {
+      setEliminandoId(null);
+    }
+  };
+
+  const handleCancelarEliminacionProgramada = async () => {
+    if (!publicacionAEliminar || eliminandoId) return;
+    const idTarget = publicacionAEliminar.id;
+    setEliminandoId(idTarget);
+    setErrorEliminacionModal(null);
+    try {
+      const res = await programarEliminacionPublicacionMuroAction(
+        idTarget,
+        null
+      );
+      if (!res.ok) {
+        setErrorEliminacionModal(
+          res.error || "No se pudo cancelar la eliminación programada."
+        );
+        return;
+      }
+      setPublicaciones((prev) =>
+        prev.map((p) => (p.id === idTarget ? { ...p, categoria: null } : p))
+      );
+      setMensajeExito("Se canceló la eliminación programada del comunicado.");
       setPublicacionAEliminar(null);
     } finally {
       setEliminandoId(null);
@@ -479,6 +605,7 @@ export default function ComunicadosTab() {
     setMensajeError(null);
 
     try {
+      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
       const {
         data: { user },
@@ -704,6 +831,7 @@ export default function ComunicadosTab() {
     setProcesandoComentarioId(comentarioId);
 
     try {
+      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
       const { error } = await supabase
         .from("muro_interacciones")
@@ -733,6 +861,7 @@ export default function ComunicadosTab() {
     setIsLoadingAcuses(true);
 
     try {
+      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
 
       const { data, error } = await supabase
@@ -1424,6 +1553,9 @@ export default function ComunicadosTab() {
                 pub.empresa_destino,
                 pub.departamento_destino
               );
+              const fechaEliminacionIso = extraerFechaEliminacionProgramada(
+                pub.categoria
+              );
               const imagenesPub = extraerUrlsImagenes(pub.imagen_url);
 
               return (
@@ -1444,6 +1576,12 @@ export default function ComunicadosTab() {
                         {esProgramado && (
                           <span className="inline-flex items-center gap-1 rounded-sm border border-brand-gold bg-brand-dark px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-brand-gold">
                             ● PROGRAMADO
+                          </span>
+                        )}
+                        {fechaEliminacionIso && (
+                          <span className="inline-flex items-center gap-1 rounded-sm border border-status-danger/40 bg-status-danger/10 px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-status-danger-dark">
+                            ⏱ SE ELIMINA:{" "}
+                            {formatearFechaHoraCorta(fechaEliminacionIso)}
                           </span>
                         )}
                         {imagenesPub.length > 0 && (
@@ -1534,7 +1672,7 @@ export default function ComunicadosTab() {
 
                       <button
                         type="button"
-                        onClick={() => setPublicacionAEliminar(pub)}
+                        onClick={() => handleAbrirModalEliminar(pub)}
                         className="inline-flex items-center gap-1.5 rounded-sm border border-status-danger/35 bg-brand-surface px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-status-danger transition-colors hover:bg-status-danger/10"
                       >
                         <TrashIcon className="h-3.5 w-3.5" />
@@ -1558,12 +1696,12 @@ export default function ComunicadosTab() {
         )}
       </section>
 
-      {/* Modal de Confirmación para Eliminar Comunicado */}
+      {/* Modal de Confirmación / Programación para Eliminar Comunicado */}
       {publicacionAEliminar && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Confirmar eliminación de comunicado"
+          aria-label="Eliminar o programar eliminación de comunicado"
           onClick={() => !eliminandoId && setPublicacionAEliminar(null)}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
         >
@@ -1573,23 +1711,103 @@ export default function ComunicadosTab() {
           >
             <header className="border-b border-gray-100 bg-brand-dark px-6 py-4 text-white">
               <span className="text-[9px] font-bold uppercase tracking-widest text-brand-gold">
-                CONFIRMACIÓN DE SEGURIDAD
+                GESTIÓN DE ELIMINACIÓN
               </span>
               <h3 className="mt-1 font-serif text-base font-bold text-white">
-                ¿Eliminar comunicado del Muro Corporativo?
+                ¿Cómo deseas eliminar este comunicado?
               </h3>
             </header>
 
-            <div className="flex flex-col gap-3 p-6 text-xs text-gray-700">
-              <p>
-                Estás a punto de eliminar permanentemente el comunicado:
-              </p>
+            <div className="flex flex-col gap-4 p-6 text-xs text-gray-700">
               <div className="rounded-sm border border-gray-200 bg-brand-beige/30 p-3 font-bold text-gray-900">
                 &ldquo;{publicacionAEliminar.titulo}&rdquo;
               </div>
-              <p className="text-[11px] text-gray-500">
-                Esta acción también eliminará sus reacciones, comentarios y acuses de recibo asociados.
-              </p>
+
+              {/* Selector de modalidad: Eliminar ahora vs Programar eliminación */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  disabled={Boolean(eliminandoId)}
+                  onClick={() => {
+                    setModoEliminacion("ahora");
+                    setErrorEliminacionModal(null);
+                  }}
+                  className={`rounded-sm border px-3 py-2.5 text-center text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                    modoEliminacion === "ahora"
+                      ? "border-status-danger bg-status-danger/10 text-status-danger-dark"
+                      : "border-gray-200 bg-brand-surface text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  Eliminar ahora
+                </button>
+                <button
+                  type="button"
+                  disabled={Boolean(eliminandoId)}
+                  onClick={() => {
+                    setModoEliminacion("programar");
+                    setErrorEliminacionModal(null);
+                  }}
+                  className={`rounded-sm border px-3 py-2.5 text-center text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                    modoEliminacion === "programar"
+                      ? "border-brand-gold bg-brand-dark text-brand-gold"
+                      : "border-gray-200 bg-brand-surface text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  Programar eliminación
+                </button>
+              </div>
+
+              {modoEliminacion === "ahora" ? (
+                <p className="text-[11px] text-gray-500">
+                  El comunicado se eliminará de inmediato junto con sus
+                  reacciones, comentarios y acuses de recibo asociados.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <label
+                    htmlFor="fecha-eliminacion-programada"
+                    className="text-[9px] font-bold uppercase tracking-widest text-gray-500"
+                  >
+                    FECHA Y HORA DE ELIMINACIÓN AUTOMÁTICA
+                  </label>
+                  <input
+                    id="fecha-eliminacion-programada"
+                    type="datetime-local"
+                    value={fechaEliminacionProgramada}
+                    onChange={(e) => {
+                      setFechaEliminacionProgramada(e.target.value);
+                      setErrorEliminacionModal(null);
+                    }}
+                    className="h-10 w-full rounded-sm border border-gray-300 bg-brand-surface px-3 text-xs font-medium text-gray-900 focus:border-brand-dark focus:outline-none"
+                  />
+                  <p className="text-[11px] text-gray-500">
+                    Al llegar esta fecha y hora, el comunicado y sus
+                    interacciones se eliminarán automáticamente del Muro
+                    Corporativo.
+                  </p>
+                  {extraerFechaEliminacionProgramada(
+                    publicacionAEliminar.categoria
+                  ) && (
+                    <button
+                      type="button"
+                      disabled={Boolean(eliminandoId)}
+                      onClick={handleCancelarEliminacionProgramada}
+                      className="mt-1 self-start text-[10px] font-bold uppercase tracking-wider text-gray-500 underline hover:text-gray-800 disabled:opacity-50"
+                    >
+                      Quitar eliminación programada actual
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {errorEliminacionModal && (
+                <p
+                  role="alert"
+                  className="rounded-sm border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-[11px] font-semibold text-status-danger-dark"
+                >
+                  {errorEliminacionModal}
+                </p>
+              )}
             </div>
 
             <footer className="flex items-center justify-end gap-2.5 border-t border-gray-100 bg-brand-beige/20 px-6 py-3.5">
@@ -1605,9 +1823,19 @@ export default function ComunicadosTab() {
                 type="button"
                 disabled={Boolean(eliminandoId)}
                 onClick={handleConfirmarEliminarPublicacion}
-                className="rounded-sm bg-status-danger px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-white transition-colors hover:bg-status-danger/90 disabled:opacity-50"
+                className={`rounded-sm px-4 py-2 text-[9px] font-bold uppercase tracking-widest transition-colors disabled:opacity-50 ${
+                  modoEliminacion === "ahora"
+                    ? "bg-status-danger text-white hover:bg-status-danger/90"
+                    : "bg-brand-dark text-brand-gold hover:bg-brand-dark/90"
+                }`}
               >
-                {eliminandoId ? "ELIMINANDO…" : "SÍ, ELIMINAR COMUNICADO"}
+                {eliminandoId
+                  ? modoEliminacion === "ahora"
+                    ? "ELIMINANDO…"
+                    : "PROGRAMANDO…"
+                  : modoEliminacion === "ahora"
+                  ? "ELIMINAR AHORA"
+                  : "PROGRAMAR ELIMINACIÓN"}
               </button>
             </footer>
           </div>
