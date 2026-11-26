@@ -5,7 +5,10 @@ import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
 import { registrarEventoAuditoria } from "@/lib/security/auditLog";
 import { verificarOrigenPermitido } from "@/lib/security/rateLimit";
 import { sanitizarErrorPublico } from "@/lib/security/safeError";
-import { esSolicitudCancelada } from "@/lib/solicitudes";
+import {
+  esSolicitudCancelada,
+  esSolicitudVacacionesExtraordinarias,
+} from "@/lib/solicitudes";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 
@@ -336,8 +339,12 @@ export async function resolverSolicitudEquipoAction(
       if (calculoDias.diasNaturales > 0) {
         const diasSolicitados = calculoDias.diasEfectivos;
         const saldoActual = Number(colaborador.saldo_vacaciones ?? 0);
+        const esExtraordinaria = esSolicitudVacacionesExtraordinarias(
+          solicitud.motivo,
+          solicitud.tipo_solicitud
+        );
 
-        if (diasSolicitados > saldoActual) {
+        if (!esExtraordinaria && diasSolicitados > saldoActual) {
           return {
             ok: false,
             error: `No se puede aprobar la solicitud: el colaborador solicita ${diasSolicitados} día(s) efectivos de vacaciones, pero solo cuenta con ${saldoActual} día(s) disponibles.`,

@@ -10,17 +10,21 @@ import {
   type FeriadoEmpresaItem,
 } from "@/lib/calendario";
 import {
+  calcularVacacionesProporcionalesExtraordinarias,
   formatearMotivoConMedioDia,
+  formatearMotivoVacacionesExtraordinarias,
   TIPO_SOLICITUD_LABELS,
   TIPOS_SOLICITUD,
   validarRestriccionSemanaNomina,
 } from "@/lib/solicitudes";
 import { createClient } from "@/lib/supabase/client";
-import type { SolicitudFormData } from "@/types/solicitudes";
+import type { SolicitudFormData, TipoSolicitud } from "@/types/solicitudes";
 
 interface RequestFormProps {
   /** Saldo disponible en `colaboradores.saldo_vacaciones`. */
   saldoVacaciones?: number;
+  /** Fecha de ingreso del colaborador (`YYYY-MM-DD`) para vacaciones extraordinarias proporcionales. */
+  fechaIngreso?: string | null;
   /** Días de vacaciones ya comprometidos en solicitudes pendientes de autorización. */
   diasVacacionesPendientes?: number;
   /** Interruptor controlado por RH para permitir vacaciones en semanas de nómina (9-15 y 23-30 del mismo mes). */
@@ -117,6 +121,7 @@ interface SolicitudPrevRow {
 
 export default function RequestForm({
   saldoVacaciones = 0,
+  fechaIngreso = null,
   diasVacacionesPendientes = 0,
   excepcionVacacionesNominaActiva = false,
   userId,
@@ -135,6 +140,9 @@ export default function RequestForm({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saldoTotalActual, setSaldoTotalActual] =
     useState<number>(saldoVacaciones);
+  const [fechaIngresoActual, setFechaIngresoActual] = useState<string | null>(
+    fechaIngreso
+  );
   const [diasPendientesActual, setDiasPendientesActual] = useState<number>(
     diasVacacionesPendientes
   );
@@ -179,7 +187,7 @@ export default function RequestForm({
         const [colabRes, solRes, cfgNomina, feriadosRes] = await Promise.all([
           supabase
             .from("colaboradores")
-            .select("saldo_vacaciones, empresa")
+            .select("saldo_vacaciones, empresa, fecha_ingreso")
             .eq("id", targetUserId)
             .maybeSingle(),
           supabase
@@ -202,6 +210,9 @@ export default function RequestForm({
 
         if (!colabRes.error && colabRes.data) {
           setSaldoTotalActual(Number(colabRes.data.saldo_vacaciones ?? 0));
+          if (colabRes.data.fecha_ingreso) {
+            setFechaIngresoActual(colabRes.data.fecha_ingreso);
+          }
         }
 
         if (!solRes.error && solRes.data) {
@@ -284,8 +295,33 @@ export default function RequestForm({
     [form.fecha_inicio, form.fecha_fin, feriadosDinamicos, empresaColaborador]
   );
 
+  const puedeSolicitarExtraordinarias = saldoTotalActual <= 0;
+
+  const tiposDisponibles = useMemo<TipoSolicitud[]>(() => {
+    if (!puedeSolicitarExtraordinarias) return TIPOS_SOLICITUD;
+    return [
+      "vacaciones",
+      "vacaciones_extraordinarias",
+      "vacaciones_pagadas",
+      "permiso_con_goce",
+      "permiso_sin_goce",
+      "incapacidad",
+    ];
+  }, [puedeSolicitarExtraordinarias]);
+
+  const calculoExtraordinarias = useMemo(
+    () =>
+      calcularVacacionesProporcionalesExtraordinarias(
+        fechaIngresoActual,
+        saldoTotalActual,
+        diasPendientesActual
+      ),
+    [fechaIngresoActual, saldoTotalActual, diasPendientesActual]
+  );
+
   const permiteMedioDia =
     form.tipo === "vacaciones" ||
+    form.tipo === "vacaciones_extraordinarias" ||
     form.tipo === "permiso_con_goce" ||
     form.tipo === "permiso_sin_goce";
 
@@ -295,7 +331,9 @@ export default function RequestForm({
     if (medioDiaEfectivo && form.fecha_inicio) {
       return calculoRangoActual.diasEfectivos > 0 ? 0.5 : 0;
     }
-    return form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas"
+    return form.tipo === "vacaciones" ||
+      form.tipo === "vacaciones_extraordinarias" ||
+      form.tipo === "vacaciones_pagadas"
       ? calculoRangoActual.diasEfectivos
       : calcularDiasSolicitados(form.fecha_inicio, form.fecha_fin);
   }, [
@@ -307,7 +345,9 @@ export default function RequestForm({
   ]);
 
   const esSolicitudVacaciones =
-    form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas";
+    form.tipo === "vacaciones" ||
+    form.tipo === "vacaciones_extraordinarias" ||
+    form.tipo === "vacaciones_pagadas";
 
   const errorSemanaNomina = useMemo(() => {
     if (!esSolicitudVacaciones) return null;
@@ -331,6 +371,7 @@ export default function RequestForm({
     if (
       name === "tipo" &&
       value !== "vacaciones" &&
+      value !== "vacaciones_extraordinarias" &&
       value !== "permiso_con_goce" &&
       value !== "permiso_sin_goce"
     ) {
@@ -409,6 +450,23 @@ export default function RequestForm({
       }
     }
 
+    // Regla de negocio: Vacaciones Extraordinarias (solo si saldo <= 0, límite proporcional redondeado a medios días)
+    if (form.tipo === "vacaciones_extraordinarias") {
+      if (!puedeSolicitarExtraordinarias) {
+        setErrorMsg(
+          "Las Vacaciones Extraordinarias solo están disponibles cuando tu saldo de vacaciones es 0 o negativo."
+        );
+        return;
+      }
+
+      if (diasSolicitados > calculoExtraordinarias.limiteDisponibleMediosDias) {
+        setErrorMsg(
+          `Límite de Vacaciones Extraordinarias excedido: solicitas ${diasSolicitados} día(s), pero tu límite proporcional disponible a hoy es de ${calculoExtraordinarias.limiteDisponibleMediosDias} día(s).`
+        );
+        return;
+      }
+    }
+
     // Regla de negocio: Si pide Vacaciones o Vacaciones Pagadas, los días solicitados no pueden superar el saldo disponible descontando días pendientes de autorización
     if (
       (form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas") &&
@@ -441,11 +499,15 @@ export default function RequestForm({
       }
 
       // Verificación estricta contra base de datos antes de insertar para evitar saltar límites
-      if (form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas") {
+      if (
+        form.tipo === "vacaciones" ||
+        form.tipo === "vacaciones_extraordinarias" ||
+        form.tipo === "vacaciones_pagadas"
+      ) {
         const [colabRes, solRes, cfgNominaActual] = await Promise.all([
           supabase
             .from("colaboradores")
-            .select("saldo_vacaciones")
+            .select("saldo_vacaciones, fecha_ingreso")
             .eq("id", targetUserId)
             .maybeSingle(),
           supabase
@@ -471,6 +533,57 @@ export default function RequestForm({
 
         const filasBD = solRes.data ?? [];
         setSolicitudesPrevias(filasBD);
+
+        if (form.tipo === "vacaciones_extraordinarias") {
+          const saldoBD = Number(
+            colabRes.data?.saldo_vacaciones ?? saldoTotalActual
+          );
+          const fechaIngresoBD =
+            colabRes.data?.fecha_ingreso ?? fechaIngresoActual;
+          const pendientesBD = filasBD.reduce((acum, fila) => {
+            const tipoLimpio = (fila.tipo_solicitud ?? "").trim().toLowerCase();
+            if (
+              (tipoLimpio === "vacaciones" ||
+                tipoLimpio === "vacaciones pagadas") &&
+              esEstatusPendienteVacaciones(fila.estatus)
+            ) {
+              return (
+                acum +
+                calcularDiasEfectivosSinFeriados(
+                  fila.fecha_inicio,
+                  fila.fecha_fin,
+                  feriadosDinamicos,
+                  empresaColaborador,
+                  fila.motivo
+                ).diasEfectivos
+              );
+            }
+            return acum;
+          }, 0);
+
+          setSaldoTotalActual(saldoBD);
+          setDiasPendientesActual(pendientesBD);
+          if (fechaIngresoBD) setFechaIngresoActual(fechaIngresoBD);
+
+          if (saldoBD > 0) {
+            setErrorMsg(
+              "Las Vacaciones Extraordinarias solo están disponibles cuando tu saldo de vacaciones es 0 o negativo."
+            );
+            return;
+          }
+
+          const calculoBD = calcularVacacionesProporcionalesExtraordinarias(
+            fechaIngresoBD,
+            saldoBD,
+            pendientesBD
+          );
+          if (diasSolicitados > calculoBD.limiteDisponibleMediosDias) {
+            setErrorMsg(
+              `Límite de Vacaciones Extraordinarias excedido: solicitas ${diasSolicitados} día(s), pero tu límite proporcional disponible a hoy es de ${calculoBD.limiteDisponibleMediosDias} día(s).`
+            );
+            return;
+          }
+        }
 
         if (form.tipo === "vacaciones" || form.tipo === "vacaciones_pagadas") {
           const saldoBD = Number(
@@ -510,7 +623,9 @@ export default function RequestForm({
             );
             return;
           }
-        } else if (form.tipo === "vacaciones_pagadas") {
+        }
+
+        if (form.tipo === "vacaciones_pagadas") {
           const anioSol = obtenerAnioFecha(form.fecha_inicio);
           const usadosPagadasBD = filasBD.reduce((acum, fila) => {
             const tipoLimpio = (fila.tipo_solicitud ?? "").trim().toLowerCase();
@@ -540,16 +655,24 @@ export default function RequestForm({
         }
       }
 
-      const tipoSolicitudLabel = TIPO_SOLICITUD_LABELS[form.tipo];
+      const esExtraordinaria = form.tipo === "vacaciones_extraordinarias";
+      // En BD `tipo_solicitud` es ENUM; Vacaciones Extraordinarias se guarda como "Vacaciones" con marca en `motivo`
+      const tipoSolicitudLabel = esExtraordinaria
+        ? "Vacaciones"
+        : TIPO_SOLICITUD_LABELS[form.tipo];
       const estatusInicial: "Pendiente_RH" | "Pendiente_Jefe" =
         form.tipo === "incapacidad" || form.tipo === "vacaciones_pagadas"
           ? "Pendiente_RH"
           : "Pendiente_Jefe";
 
-      const motivoFinal = formatearMotivoConMedioDia(
+      const motivoConMedioDia = formatearMotivoConMedioDia(
         form.motivo,
         medioDiaEfectivo,
         jornadaMedioDia
+      );
+      const motivoFinal = formatearMotivoVacacionesExtraordinarias(
+        motivoConMedioDia,
+        esExtraordinaria
       );
       const fechaFinGuardar = medioDiaEfectivo
         ? form.fecha_inicio
@@ -588,7 +711,11 @@ export default function RequestForm({
         return;
       }
 
-      if (form.tipo === "vacaciones") {
+      if (
+        form.tipo === "vacaciones" ||
+        form.tipo === "vacaciones_extraordinarias" ||
+        form.tipo === "vacaciones_pagadas"
+      ) {
         setDiasPendientesActual((prev) => prev + diasSolicitados);
       }
       setSolicitudesPrevias((prev) => [
@@ -640,6 +767,22 @@ export default function RequestForm({
                 Mínimo {MINIMO_DIAS_VACACIONES_PAGADAS} días por solicitud
               </span>
             </>
+          ) : form.tipo === "vacaciones_extraordinarias" ? (
+            <>
+              <span className="rounded-sm border border-brand-gold/50 bg-brand-beige/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-brand-dark">
+                Límite extraordinario proporcional:{" "}
+                {calculoExtraordinarias.limiteDisponibleMediosDias}{" "}
+                {calculoExtraordinarias.limiteDisponibleMediosDias === 1
+                  ? "día"
+                  : "días"}
+              </span>
+              {diasPendientesActual > 0 && (
+                <span className="rounded-sm border border-status-warning/40 bg-status-warning/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-status-warning-dark">
+                  En revisión: {diasPendientesActual}{" "}
+                  {diasPendientesActual === 1 ? "día" : "días"}
+                </span>
+              )}
+            </>
           ) : (
             <>
               <span className="rounded-sm bg-brand-beige px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-gray-700">
@@ -675,7 +818,7 @@ export default function RequestForm({
             onChange={handleChange}
             className={`${FIELD} h-11 px-3 font-medium text-gray-800`}
           >
-            {TIPOS_SOLICITUD.map((tipo) => (
+            {tiposDisponibles.map((tipo) => (
               <option key={tipo} value={tipo}>
                 {TIPO_SOLICITUD_LABELS[tipo]}
               </option>

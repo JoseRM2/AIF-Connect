@@ -5,7 +5,10 @@ import BalanceCards from "@/components/solicitudes/BalanceCards";
 import RequestList from "@/components/solicitudes/RequestList";
 import RequestsWorkspace from "@/components/solicitudes/RequestsWorkspace";
 import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
-import { esSolicitudCancelada } from "@/lib/solicitudes";
+import {
+  esSolicitudCancelada,
+  esSolicitudVacacionesExtraordinarias,
+} from "@/lib/solicitudes";
 import { createClient } from "@/lib/supabase/server";
 import type {
   EstatusSolicitud,
@@ -81,7 +84,7 @@ export default async function SolicitudesPage() {
   ] = await Promise.all([
     supabase
       .from("colaboradores")
-      .select("saldo_vacaciones, empresa")
+      .select("saldo_vacaciones, empresa, fecha_ingreso")
       .eq("id", user.id)
       .maybeSingle(),
     obtenerConfigVacacionesNominaAction(),
@@ -106,18 +109,26 @@ export default async function SolicitudesPage() {
     dias_proporcionales: saldoDias,
   };
 
-  const solicitudesReales: Solicitud[] = (filasSolicitudes ?? []).map(
-    (fila) => ({
+  const solicitudesReales: Solicitud[] = (filasSolicitudes ?? []).map((fila) => {
+    const esExtra = esSolicitudVacacionesExtraordinarias(
+      fila.motivo,
+      fila.tipo_solicitud
+    );
+    return {
       id: fila.id,
       colaborador_id: fila.colaborador_id,
-      tipo: normalizarTipoSolicitud(fila.tipo_solicitud),
-      tipo_label: fila.tipo_solicitud || undefined,
+      tipo: esExtra
+        ? "vacaciones_extraordinarias"
+        : normalizarTipoSolicitud(fila.tipo_solicitud),
+      tipo_label: esExtra
+        ? "Vacaciones Extraordinarias"
+        : fila.tipo_solicitud || undefined,
       fecha_inicio: fila.fecha_inicio,
       fecha_fin: fila.fecha_fin,
       motivo: fila.motivo ?? "",
       estatus: normalizarEstatusSolicitud(fila.estatus, fila.motivo),
-    })
-  );
+    };
+  });
 
   // Días ya comprometidos en solicitudes de "Vacaciones" pendientes de autorización (descontando feriados oficiales y de empresa)
   const diasVacacionesPendientes = (filasSolicitudes ?? []).reduce(
@@ -147,6 +158,7 @@ export default async function SolicitudesPage() {
   return (
     <RequestsWorkspace
       saldoVacaciones={saldoDias}
+      fechaIngreso={colaborador?.fecha_ingreso ?? null}
       diasVacacionesPendientes={diasVacacionesPendientes}
       excepcionVacacionesNominaInicial={configNomina.excepcionActiva}
       userId={user.id}

@@ -16,6 +16,8 @@ interface RequestsWorkspaceProps {
   list: ReactNode;
   /** Saldo de vacaciones disponible del colaborador para validar en el formulario. */
   saldoVacaciones?: number;
+  /** Fecha de ingreso del colaborador (`YYYY-MM-DD`) para cálculo de vacaciones extraordinarias proporcionales. */
+  fechaIngreso?: string | null;
   /** Días de vacaciones ya comprometidos en solicitudes pendientes de autorización. */
   diasVacacionesPendientes?: number;
   /** Estado inicial del interruptor de excepción en semana de nómina controlado por RH. */
@@ -27,6 +29,7 @@ export default function RequestsWorkspace({
   metrics,
   list,
   saldoVacaciones = 0,
+  fechaIngreso = null,
   diasVacacionesPendientes = 0,
   excepcionVacacionesNominaInicial = false,
   userId,
@@ -75,12 +78,12 @@ export default function RequestsWorkspace({
             <div className="flex items-center gap-3 rounded-md border border-brand-gold/50 bg-brand-surface px-4 py-2 shadow-sm">
               <div className="flex flex-col">
                 <span className="text-[8px] font-extrabold uppercase tracking-wider text-brand-gold">
-                  INTERRUPTOR RH · EXCEPCIÓN NÓMINA (9-15 Y 23-30)
+                  INTERRUPTOR RH · EXCEPCIÓN ANTICIPACIÓN (10 DÍAS)
                 </span>
                 <span className="text-[10px] font-bold text-gray-800">
                   {excepcionNominaActiva
-                    ? "Solicitudes extraordinarias: ACTIVAS"
-                    : "Bloqueo estándar de nómina: ACTIVO"}
+                    ? "Solicitudes sin anticipación: ACTIVAS"
+                    : "Regla de 10 días de anticipación: ACTIVA"}
                 </span>
               </div>
               <button
@@ -136,6 +139,7 @@ export default function RequestsWorkspace({
         {abierto && (
           <RequestForm
             saldoVacaciones={saldoVacaciones}
+            fechaIngreso={fechaIngreso}
             diasVacacionesPendientes={diasVacacionesPendientes}
             excepcionVacacionesNominaActiva={excepcionNominaActiva}
             userId={userId}

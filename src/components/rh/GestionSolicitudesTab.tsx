@@ -11,6 +11,7 @@ import { calcularDiasEfectivosSinFeriados } from "@/lib/calendario";
 import {
   esSolicitudCancelada,
   esSolicitudMedioDia,
+  esSolicitudVacacionesExtraordinarias,
   extraerMotivoCancelacion,
   formatearMotivoConMedioDia,
 } from "@/lib/solicitudes";
@@ -369,8 +370,12 @@ export default function GestionSolicitudesTab() {
           solicitud.motivo
         ).diasEfectivos;
         const saldoActual = obtenerSaldoColaborador(solicitud.colaboradores);
+        const esExtraordinaria = esSolicitudVacacionesExtraordinarias(
+          solicitud.motivo,
+          solicitud.tipo_solicitud
+        );
 
-        if (diasSolicitados > saldoActual) {
+        if (!esExtraordinaria && diasSolicitados > saldoActual) {
           const msgInsuficiente = `No se puede aprobar la solicitud: el colaborador solicita ${diasSolicitados} día(s) de vacaciones, pero solo cuenta con ${saldoActual} día(s) disponibles.`;
           setErrorMsg(msgInsuficiente);
           return;
@@ -1055,7 +1060,7 @@ export default function GestionSolicitudesTab() {
             >
               {excepcionNominaActiva
                 ? "EXCEPCIÓN ACTIVA (SOLICITUDES HABILITADAS)"
-                : "RESTRICCIÓN ACTIVA (9-15 Y 23-30 BLOQUEADOS)"}
+                : "RESTRICCIÓN ACTIVA (MÍN. 10 DÍAS DE ANTICIPACIÓN)"}
             </span>
           </div>
         </div>

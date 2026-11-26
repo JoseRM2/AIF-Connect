@@ -2,6 +2,7 @@ import type { TipoSolicitud } from "@/types/solicitudes";
 
 export const TIPO_SOLICITUD_LABELS: Record<TipoSolicitud, string> = {
   vacaciones: "Vacaciones",
+  vacaciones_extraordinarias: "Vacaciones Extraordinarias",
   vacaciones_pagadas: "Vacaciones Pagadas",
   permiso_con_goce: "Permiso con goce de sueldo",
   permiso_sin_goce: "Permiso sin goce de sueldo",
@@ -15,6 +16,40 @@ export const TIPOS_SOLICITUD: TipoSolicitud[] = [
   "permiso_sin_goce",
   "incapacidad",
 ];
+
+const REGEX_MARCA_EXTRAORDINARIAS = /\[VACACIONES EXTRAORDINARIAS\]\s*/i;
+
+/**
+ * Detecta si una solicitud corresponde a Vacaciones Extraordinarias
+ * (ya sea por su `tipo_solicitud` o por la marca `[VACACIONES EXTRAORDINARIAS]` en `motivo`).
+ */
+export function esSolicitudVacacionesExtraordinarias(
+  motivo?: string | null,
+  tipoSolicitud?: string | null
+): boolean {
+  const tipoNorm = (tipoSolicitud ?? "").trim().toLowerCase();
+  if (tipoNorm.includes("extraordinaria")) return true;
+  return REGEX_MARCA_EXTRAORDINARIAS.test(motivo ?? "");
+}
+
+/**
+ * Incorpora o elimina la marca `[VACACIONES EXTRAORDINARIAS]` en el motivo para
+ * identificarla en flujos de Jefatura y RH sin requerir cambios en el ENUM de PostgreSQL.
+ */
+export function formatearMotivoVacacionesExtraordinarias(
+  motivoRaw: string | null | undefined,
+  esExtraordinaria: boolean
+): string | null {
+  const limpio = (motivoRaw ?? "")
+    .replace(REGEX_MARCA_EXTRAORDINARIAS, "")
+    .trim();
+  if (!esExtraordinaria) {
+    return limpio || null;
+  }
+  return limpio
+    ? `[VACACIONES EXTRAORDINARIAS] ${limpio}`
+    : "[VACACIONES EXTRAORDINARIAS]";
+}
 
 /**
  * Detecta si el motivo de una solicitud tiene la marca de medio día (`[MEDIO DÍA]` o `0.5 día`).
@@ -172,12 +207,12 @@ export function esDiaEnSemanaNomina(
   return obtenerDiasHabilesPreviosQuincena(anio, mes1a12).has(dia);
 }
 
+export const DIAS_ANTICIPACION_VACACIONES = 10;
+
 /**
- * Valida la regla de restricción en los 5 días hábiles antes de quincena para solicitudes de vacaciones:
- * - El colaborador SÍ puede crear solicitudes en cualquier fecha (por ejemplo, el 10 de noviembre
- *   puede solicitar vacaciones para el 16 al 22 de noviembre o para el 19 de noviembre).
- * - Lo que NO se permite (salvo excepción activa de RH) es que los DÍAS SOLICITADOS de vacaciones
- *   (`fechaInicio` a `fechaFin`) incluyan alguno de los 5 días hábiles previos a quincena (día 15 y día 30/fin de mes).
+ * Valida que la solicitud de vacaciones se realice con al menos 10 días naturales de anticipación
+ * respecto a la fecha actual (zona horaria `America/Mexico_City`), salvo que RH haya activado
+ * el interruptor de excepción.
  */
 export function validarRestriccionSemanaNomina(
   fechaInicio: string,
@@ -195,33 +230,37 @@ export function validarRestriccionSemanaNomina(
   const finUtc = Date.UTC(y2, m2 - 1, d2);
   if (finUtc < inicioUtc) return null;
 
-  const mapasPorMes = new Map<string, Set<number>>();
-  const diasEnConflicto: string[] = [];
-  const MS_POR_DIA = 86_400_000;
+  // Obtener la fecha actual en zona horaria America/Mexico_City
+  const ahora = new Date();
+  let anioHoy = ahora.getFullYear();
+  let mesHoy = ahora.getMonth() + 1;
+  let diaHoy = ahora.getDate();
 
-  for (let ms = inicioUtc; ms <= finUtc; ms += MS_POR_DIA) {
-    const fechaDia = new Date(ms);
-    const anioDia = fechaDia.getUTCFullYear();
-    const mesDia = fechaDia.getUTCMonth() + 1;
-    const numDia = fechaDia.getUTCDate();
-    const claveMes = `${anioDia}-${mesDia}`;
-
-    if (!mapasPorMes.has(claveMes)) {
-      mapasPorMes.set(
-        claveMes,
-        obtenerDiasHabilesPreviosQuincena(anioDia, mesDia)
-      );
+  try {
+    const partes = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Mexico_City",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(ahora);
+    const y = Number(partes.find((p) => p.type === "year")?.value ?? 0);
+    const m = Number(partes.find((p) => p.type === "month")?.value ?? 0);
+    const d = Number(partes.find((p) => p.type === "day")?.value ?? 0);
+    if (y && m && d) {
+      anioHoy = y;
+      mesHoy = m;
+      diaHoy = d;
     }
-
-    const restringidosMes = mapasPorMes.get(claveMes)!;
-    if (restringidosMes.has(numDia)) {
-      const nombreMes = MESES_NOMBRES[mesDia - 1] ?? "";
-      diasEnConflicto.push(`${numDia} de ${nombreMes}`);
-    }
+  } catch {
+    // Respaldo con fecha local del navegador/servidor
   }
 
-  if (diasEnConflicto.length > 0) {
-    return "Advertencia: no es posible realizar la solicitud ya que debe solicitarse con 10 dias de anticipación";
+  const hoyUtc = Date.UTC(anioHoy, mesHoy - 1, diaHoy);
+  const MS_POR_DIA = 86_400_000;
+  const diasAnticipacion = Math.round((inicioUtc - hoyUtc) / MS_POR_DIA);
+
+  if (diasAnticipacion < DIAS_ANTICIPACION_VACACIONES) {
+    return "La solicitud debe realizarse con 10 días de anticipación";
   }
 
   return null;
@@ -297,4 +336,120 @@ export function calcularAniosAntiguedadCumplidos(
   }
 
   return Math.max(0, anios);
+}
+
+export interface CalculoVacacionesExtraordinarias {
+  diasTranscurridos: number;
+  diasAnioEnCurso: number;
+  factorDiario: number;
+  proporcionalBruto: number;
+  limiteDisponibleMediosDias: number;
+}
+
+/**
+ * Calcula el límite máximo de Vacaciones Extraordinarias (adelanto proporcional)
+ * redondeado hacia abajo a medios días (0.5):
+ * - Días transcurridos (inclusive) desde `fecha_ingreso` (o desde el último aniversario laboral).
+ * - Factor diario = (días LFT correspondientes al año laboral en curso) / 365.
+ * - Proporcional bruto = factor diario × días transcurridos.
+ * - Límite disponible = floor((proporcional + min(0, saldoActual) - diasPendientes) * 2) / 2.
+ */
+export function calcularVacacionesProporcionalesExtraordinarias(
+  fechaIngresoIso?: string | null,
+  saldoActual = 0,
+  diasPendientes = 0,
+  fechaReferencia?: Date
+): CalculoVacacionesExtraordinarias {
+  if (!fechaIngresoIso) {
+    return {
+      diasTranscurridos: 0,
+      diasAnioEnCurso: 12,
+      factorDiario: 12 / 365,
+      proporcionalBruto: 0,
+      limiteDisponibleMediosDias: 0,
+    };
+  }
+
+  const soloFecha = fechaIngresoIso.trim().slice(0, 10);
+  const [anioIng, mesIng, diaIng] = soloFecha.split("-").map(Number);
+  if (!anioIng || !mesIng || !diaIng) {
+    return {
+      diasTranscurridos: 0,
+      diasAnioEnCurso: 12,
+      factorDiario: 12 / 365,
+      proporcionalBruto: 0,
+      limiteDisponibleMediosDias: 0,
+    };
+  }
+
+  const ref = fechaReferencia ?? new Date();
+  let anioRef = ref.getFullYear();
+  let mesRef = ref.getMonth() + 1;
+  let diaRef = ref.getDate();
+
+  if (!fechaReferencia) {
+    try {
+      const partes = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Mexico_City",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(ref);
+      const y = Number(partes.find((p) => p.type === "year")?.value ?? 0);
+      const m = Number(partes.find((p) => p.type === "month")?.value ?? 0);
+      const d = Number(partes.find((p) => p.type === "day")?.value ?? 0);
+      if (y && m && d) {
+        anioRef = y;
+        mesRef = m;
+        diaRef = d;
+      }
+    } catch {
+      // Respaldo con fecha local
+    }
+  }
+
+  const aniosCumplidos = calcularAniosAntiguedadCumplidos(
+    fechaIngresoIso,
+    fechaReferencia
+  );
+  const diasAnioEnCurso = calcularDiasVacacionesPorAniosLft(
+    aniosCumplidos + 1
+  );
+  const factorDiario = diasAnioEnCurso / 365;
+
+  const anioInicioPeriodo = anioIng + aniosCumplidos;
+  const ultimoDiaMesInicio = new Date(
+    Date.UTC(anioInicioPeriodo, mesIng, 0)
+  ).getUTCDate();
+  const diaInicioPeriodo = Math.min(diaIng, ultimoDiaMesInicio);
+
+  const inicioPeriodoUtc = Date.UTC(
+    anioInicioPeriodo,
+    mesIng - 1,
+    diaInicioPeriodo
+  );
+  const hoyUtc = Date.UTC(anioRef, mesRef - 1, diaRef);
+
+  const MS_POR_DIA = 86_400_000;
+  const diasTranscurridos =
+    hoyUtc >= inicioPeriodoUtc
+      ? Math.round((hoyUtc - inicioPeriodoUtc) / MS_POR_DIA) + 1
+      : 0;
+
+  const proporcionalBruto = factorDiario * diasTranscurridos;
+  const saldoNegativoPrevio = Math.min(0, Number(saldoActual) || 0);
+  const pendientes = Math.max(0, Number(diasPendientes) || 0);
+  const limiteNeto = proporcionalBruto + saldoNegativoPrevio - pendientes;
+  const limiteDisponibleMediosDias = Math.max(
+    0,
+    Math.floor(limiteNeto * 2) / 2
+  );
+
+  return {
+    diasTranscurridos,
+    diasAnioEnCurso,
+    factorDiario,
+    proporcionalBruto,
+    limiteDisponibleMediosDias,
+  };
 }
