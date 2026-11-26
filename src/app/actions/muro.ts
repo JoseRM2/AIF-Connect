@@ -3,13 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { obtenerSesionYRol } from "@/lib/auth/session";
 import {
-  construirMarcaEliminacionProgramada,
   cumpleFiltroAudiencia,
   esAudienciaCelebracion,
-  estaVencidaParaEliminacion,
   extraerCelebracionArea,
   extraerJefeFestejadoId,
-  PREFIJO_ELIMINACION_PROGRAMADA,
 } from "@/lib/muro";
 import {
   verificarOrigenPermitido,
@@ -17,9 +14,64 @@ import {
 } from "@/lib/security/rateLimit";
 import { comentarioMuroSchema, validarConZod } from "@/lib/security/schemas";
 import { sanitizarErrorPublico } from "@/lib/security/safeError";
+import { BUCKET_EXPEDIENTES } from "@/lib/storage/expedientes";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 import type { InteraccionMuroRow, PublicacionMuro } from "@/types/muro";
+
+const RUTA_ELIMINACIONES_MURO = "_sistema/eliminaciones_programadas_muro.json";
+let cacheEliminacionesMuro: Record<string, string> = {};
+
+async function leerMapaEliminacionesProgramadas(): Promise<
+  Record<string, string>
+> {
+  try {
+    const db = createAdminClient();
+    const { data, error } = await db.storage
+      .from(BUCKET_EXPEDIENTES)
+      .download(RUTA_ELIMINACIONES_MURO);
+
+    if (error || !data) {
+      return { ...cacheEliminacionesMuro };
+    }
+
+    const texto = await data.text();
+    const parsed = JSON.parse(texto) as Record<string, unknown>;
+    const limpio: Record<string, string> = {};
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [id, iso] of Object.entries(parsed)) {
+        if (typeof iso === "string" && !Number.isNaN(new Date(iso).getTime())) {
+          limpio[id] = new Date(iso).toISOString();
+        }
+      }
+    }
+    cacheEliminacionesMuro = limpio;
+    return { ...limpio };
+  } catch {
+    return { ...cacheEliminacionesMuro };
+  }
+}
+
+async function guardarMapaEliminacionesProgramadas(
+  mapa: Record<string, string>
+): Promise<boolean> {
+  cacheEliminacionesMuro = { ...mapa };
+  try {
+    const db = createAdminClient();
+    const contenido = new Blob([JSON.stringify(mapa, null, 2)], {
+      type: "application/json",
+    });
+    const { error } = await db.storage
+      .from(BUCKET_EXPEDIENTES)
+      .upload(RUTA_ELIMINACIONES_MURO, contenido, {
+        upsert: true,
+        contentType: "application/json",
+      });
+    return !error;
+  } catch {
+    return false;
+  }
+}
 
 export interface DatosMuroResponse {
   ok: boolean;
@@ -38,28 +90,22 @@ export interface DatosMuroResponse {
  */
 /**
  * Elimina automáticamente de `muro_publicaciones` (y sus interacciones vinculadas)
- * cualquier comunicado cuya fecha/hora programada de eliminación (`categoria = ELIMINAR_EN:<ISO>`)
- * ya se haya cumplido.
+ * cualquier comunicado cuya fecha/hora programada de eliminación ya se haya cumplido.
  */
 export async function depurarPublicacionesEliminacionVencida(): Promise<number> {
   try {
-    const db = createAdminClient();
-    const { data: programadas, error } = await db
-      .from("muro_publicaciones")
-      .select("id, categoria")
-      .like("categoria", `${PREFIJO_ELIMINACION_PROGRAMADA}%`);
-
-    if (error || !programadas || programadas.length === 0) {
-      return 0;
-    }
+    const mapa = await leerMapaEliminacionesProgramadas();
+    const entradas = Object.entries(mapa);
+    if (entradas.length === 0) return 0;
 
     const ahoraMs = Date.now();
-    const idsVencidos = programadas
-      .filter((p) => estaVencidaParaEliminacion(p.categoria, ahoraMs))
-      .map((p) => p.id);
+    const idsVencidos = entradas
+      .filter(([, iso]) => new Date(iso).getTime() <= ahoraMs)
+      .map(([id]) => id);
 
     if (idsVencidos.length === 0) return 0;
 
+    const db = createAdminClient();
     await db
       .from("muro_interacciones")
       .delete()
@@ -72,10 +118,27 @@ export async function depurarPublicacionesEliminacionVencida(): Promise<number> 
 
     if (errDel) return 0;
 
+    const nuevoMapa = { ...mapa };
+    for (const id of idsVencidos) {
+      delete nuevoMapa[id];
+    }
+    await guardarMapaEliminacionesProgramadas(nuevoMapa);
+
     return idsVencidos.length;
   } catch {
     return 0;
   }
+}
+
+/**
+ * Devuelve el mapa `{ [publicacionId]: fechaIso }` de eliminaciones programadas activas
+ * tras depurar las ya vencidas.
+ */
+export async function obtenerEliminacionesProgramadasMuroAction(): Promise<
+  Record<string, string>
+> {
+  await depurarPublicacionesEliminacionVencida();
+  return leerMapaEliminacionesProgramadas();
 }
 
 export async function obtenerDatosMuroAction(): Promise<DatosMuroResponse> {
@@ -562,6 +625,13 @@ export async function eliminarPublicacionMuroAction(
       };
     }
 
+    // Limpiar del registro de eliminaciones programadas si existía
+    const mapaElim = await leerMapaEliminacionesProgramadas();
+    if (mapaElim[idLimpio]) {
+      delete mapaElim[idLimpio];
+      await guardarMapaEliminacionesProgramadas(mapaElim);
+    }
+
     revalidatePath("/dashboard");
     revalidatePath("/dashboard/muro");
     revalidatePath("/dashboard/rh");
@@ -580,7 +650,7 @@ export async function eliminarPublicacionMuroAction(
 
 /**
  * Programa (o cancela si `fechaEliminacionIso` es `null`) la fecha y hora de eliminación
- * automática de un comunicado en `muro_publicaciones`.
+ * automática de un comunicado del Muro Corporativo.
  * Exclusivo para Recursos Humanos (o Administrador del Sistema).
  */
 export async function programarEliminacionPublicacionMuroAction(
@@ -588,7 +658,7 @@ export async function programarEliminacionPublicacionMuroAction(
   fechaEliminacionIso: string | null
 ): Promise<{
   ok: boolean;
-  categoria?: string | null;
+  fechaEliminacionIso?: string | null;
   error?: string;
 }> {
   try {
@@ -610,7 +680,9 @@ export async function programarEliminacionPublicacionMuroAction(
       return { ok: false, error: "Identificador de comunicado inválido." };
     }
 
-    let categoriaNueva: string | null = null;
+    const mapa = await leerMapaEliminacionesProgramadas();
+    let isoGuardada: string | null = null;
+
     if (fechaEliminacionIso) {
       const fechaObj = new Date(fechaEliminacionIso);
       if (Number.isNaN(fechaObj.getTime())) {
@@ -626,24 +698,18 @@ export async function programarEliminacionPublicacionMuroAction(
             "La fecha y hora de eliminación debe ser posterior al momento actual.",
         };
       }
-      categoriaNueva = construirMarcaEliminacionProgramada(
-        fechaObj.toISOString()
-      );
+      isoGuardada = fechaObj.toISOString();
+      mapa[idLimpio] = isoGuardada;
+    } else {
+      delete mapa[idLimpio];
     }
 
-    const db = createAdminClient();
-    const { error } = await db
-      .from("muro_publicaciones")
-      .update({ categoria: categoriaNueva })
-      .eq("id", idLimpio);
-
-    if (error) {
+    const guardado = await guardarMapaEliminacionesProgramadas(mapa);
+    if (!guardado) {
       return {
         ok: false,
-        error: sanitizarErrorPublico(
-          error,
-          "No se pudo programar la eliminación del comunicado."
-        ),
+        error:
+          "No se pudo guardar la programación de eliminación en el almacenamiento del sistema.",
       };
     }
 
@@ -651,7 +717,7 @@ export async function programarEliminacionPublicacionMuroAction(
     revalidatePath("/dashboard/muro");
     revalidatePath("/dashboard/rh");
 
-    return { ok: true, categoria: categoriaNueva };
+    return { ok: true, fechaEliminacionIso: isoGuardada };
   } catch (err) {
     return {
       ok: false,

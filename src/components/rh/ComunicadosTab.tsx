@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import {
   actualizarPublicacionMuroAction,
-  depurarPublicacionesEliminacionVencida,
   eliminarPublicacionMuroAction,
+  obtenerEliminacionesProgramadasMuroAction,
   programarEliminacionPublicacionMuroAction,
 } from "@/app/actions/muro";
 import {
@@ -15,7 +15,6 @@ import {
   TrashIcon,
 } from "@/components/ui/icons";
 import {
-  extraerFechaEliminacionProgramada,
   extraerUrlsImagenes,
   formatearAlcancePublicacion,
   serializarUrlsImagenes,
@@ -160,6 +159,9 @@ export default function ComunicadosTab() {
   const [urlsExistentesEdicion, setUrlsExistentesEdicion] = useState<string[]>(
     []
   );
+  const [eliminacionesProgramadas, setEliminacionesProgramadas] = useState<
+    Record<string, string>
+  >({});
   const [publicacionAEliminar, setPublicacionAEliminar] =
     useState<PublicacionMuroRow | null>(null);
   const [modoEliminacion, setModoEliminacion] = useState<"ahora" | "programar">(
@@ -187,7 +189,8 @@ export default function ComunicadosTab() {
     setFetchError(null);
 
     try {
-      await depurarPublicacionesEliminacionVencida();
+      const mapaElim = await obtenerEliminacionesProgramadasMuroAction();
+      setEliminacionesProgramadas(mapaElim);
       const supabase = createClient();
 
       const primeraConsulta = await supabase
@@ -243,7 +246,6 @@ export default function ComunicadosTab() {
   const fetchComentariosPendientes = useCallback(async () => {
     setIsLoadingComentarios(true);
     try {
-      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
 
       const { data, error } = await supabase
@@ -471,7 +473,7 @@ export default function ComunicadosTab() {
 
   const handleAbrirModalEliminar = (pub: PublicacionMuroRow) => {
     setErrorEliminacionModal(null);
-    const fechaExistente = extraerFechaEliminacionProgramada(pub.categoria);
+    const fechaExistente = eliminacionesProgramadas[pub.id] ?? null;
     if (fechaExistente) {
       setModoEliminacion("programar");
       setFechaEliminacionProgramada(
@@ -519,11 +521,10 @@ export default function ComunicadosTab() {
           );
           return;
         }
-        setPublicaciones((prev) =>
-          prev.map((p) =>
-            p.id === idTarget ? { ...p, categoria: res.categoria ?? null } : p
-          )
-        );
+        setEliminacionesProgramadas((prev) => ({
+          ...prev,
+          [idTarget]: res.fechaEliminacionIso ?? fechaObj.toISOString(),
+        }));
         setMensajeExito(
           `Eliminación programada para el ${formatearFechaHoraCorta(
             fechaObj.toISOString()
@@ -574,9 +575,11 @@ export default function ComunicadosTab() {
         );
         return;
       }
-      setPublicaciones((prev) =>
-        prev.map((p) => (p.id === idTarget ? { ...p, categoria: null } : p))
-      );
+      setEliminacionesProgramadas((prev) => {
+        const copia = { ...prev };
+        delete copia[idTarget];
+        return copia;
+      });
       setMensajeExito("Se canceló la eliminación programada del comunicado.");
       setPublicacionAEliminar(null);
     } finally {
@@ -605,7 +608,6 @@ export default function ComunicadosTab() {
     setMensajeError(null);
 
     try {
-      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
       const {
         data: { user },
@@ -831,7 +833,6 @@ export default function ComunicadosTab() {
     setProcesandoComentarioId(comentarioId);
 
     try {
-      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
       const { error } = await supabase
         .from("muro_interacciones")
@@ -861,7 +862,6 @@ export default function ComunicadosTab() {
     setIsLoadingAcuses(true);
 
     try {
-      await depurarPublicacionesEliminacionVencida();
       const supabase = createClient();
 
       const { data, error } = await supabase
@@ -1553,9 +1553,8 @@ export default function ComunicadosTab() {
                 pub.empresa_destino,
                 pub.departamento_destino
               );
-              const fechaEliminacionIso = extraerFechaEliminacionProgramada(
-                pub.categoria
-              );
+              const fechaEliminacionIso =
+                eliminacionesProgramadas[pub.id] ?? null;
               const imagenesPub = extraerUrlsImagenes(pub.imagen_url);
 
               return (
@@ -1785,9 +1784,7 @@ export default function ComunicadosTab() {
                     interacciones se eliminarán automáticamente del Muro
                     Corporativo.
                   </p>
-                  {extraerFechaEliminacionProgramada(
-                    publicacionAEliminar.categoria
-                  ) && (
+                  {eliminacionesProgramadas[publicacionAEliminar.id] && (
                     <button
                       type="button"
                       disabled={Boolean(eliminandoId)}
